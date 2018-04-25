@@ -137,7 +137,7 @@ class DeploymentRepositoryImpl[K, C, S](
   override def ids(): Source[String, NotUsed] = repo.ids()
 
   override def all(): Source[DeploymentPlan, NotUsed] =
-    repo.ids().mapAsync(RepositoryConstants.maxConcurrency)(get).collect { case Some(g) => g }
+    repo.ids().mapAsync(RepositoryConstants.MaxConcurrency)(get).collect { case Some(g) => g }
 
   @SuppressWarnings(Array("all")) // async/await
   override def get(id: String): Future[Option[DeploymentPlan]] = async { // linter:ignore UnnecessaryElseBranch
@@ -150,6 +150,6 @@ class DeploymentRepositoryImpl[K, C, S](
   }
 
   private[storage] def lazyAll(): Source[StoredPlan, NotUsed] =
-    repo.ids().mapAsync(RepositoryConstants.maxConcurrency)(repo.get).collect { case Some(g) => g }
+    repo.ids().mapAsync(RepositoryConstants.MaxConcurrency)(repo.get).collect { case Some(g) => g }
 }
 

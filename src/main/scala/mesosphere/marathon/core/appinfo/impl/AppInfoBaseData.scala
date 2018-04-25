@@ -33,6 +33,8 @@ class AppInfoBaseData(
     taskFailureRepository: TaskFailureRepository,
     groupManager: GroupManager)(implicit ec: ExecutionContext, mat: Materializer) extends StrictLogging {
 
+  private val ConcurrentCallLimit = 8
+
   logger.debug(s"new AppInfoBaseData $this")
 
   lazy val runningDeployments: Future[Seq[DeploymentStepInfo]] = deploymentService.listRunningDeployments()
@@ -168,7 +170,7 @@ class AppInfoBaseData(
     val instances = await(instancesByRunSpecFuture).specInstances(podDef.id)
     val specByVersion: Map[Timestamp, Option[PodDefinition]] = await(
       Source(instances.map(_.runSpecVersion).distinct)
-        .mapAsync(8)(version => groupManager.podVersion(podDef.id, version.toOffsetDateTime).map(version -> _))
+        .mapAsync(ConcurrentCallLimit)(version => groupManager.podVersion(podDef.id, version.toOffsetDateTime).map(version -> _))
         .runWith(Sink.seq)
     ).toMap
 

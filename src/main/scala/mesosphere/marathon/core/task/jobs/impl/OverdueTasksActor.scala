@@ -38,6 +38,8 @@ private[jobs] object OverdueTasksActor {
       clock: Clock) extends StrictLogging {
     import scala.concurrent.ExecutionContext.Implicits.global
 
+    private val ConcurrentCallLimit = 8
+
     def check()(implicit mat: Materializer): Future[Unit] = {
       val now = clock.now()
       logger.debug("Checking for overdue tasks")
@@ -85,7 +87,7 @@ private[jobs] object OverdueTasksActor {
     }
 
     private[this] def timeoutOverdueReservations(now: Timestamp, instances: Seq[Instance])(implicit mat: Materializer): Future[Unit] = {
-      val taskTimeoutResults = Source(overdueReservations(now, instances)).mapAsync(8) { instance =>
+      val taskTimeoutResults = Source(overdueReservations(now, instances)).mapAsync(ConcurrentCallLimit) { instance =>
         logger.warn("Scheduling ReservationTimeout for {}", instance.instanceId)
         instanceTracker.updateReservationTimeout(instance.instanceId)
       }.runWith(Sink.ignore)

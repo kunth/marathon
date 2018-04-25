@@ -48,6 +48,8 @@ class TasksResource @Inject() (
 
   implicit val materializer = ActorMaterializer()(system)
 
+  private val ConcurrentCallLimit = 8
+
   @GET
   @Produces(Array(MarathonMediaType.PREFERRED_APPLICATION_JSON))
   @SuppressWarnings(Array("all")) /* async/await */
@@ -70,7 +72,7 @@ class TasksResource @Inject() (
       }
 
       val health = await(
-        Source(appIds).mapAsync(8) { appId =>
+        Source(appIds).mapAsync(ConcurrentCallLimit) { appId =>
           healthCheckManager.statuses(appId)
         }.runFold(Map[Id, Seq[Health]]())(_ ++ _)
       )
@@ -144,7 +146,7 @@ class TasksResource @Inject() (
       affectedApps.foreach(checkAuthorization(UpdateRunSpec, _))
       val killed = await(Source(toKill)
         .filter { case (appId, _) => affectedApps.exists(app => app.id == appId) }
-        .mapAsync(8) { case (appId, instances) => taskKiller.kill(appId, _ => instances, wipe) }
+        .mapAsync(ConcurrentCallLimit) { case (appId, instances) => taskKiller.kill(appId, _ => instances, wipe) }
         .mapConcat(Predef.identity)
         .runWith(Sink.seq)
       )
@@ -158,7 +160,7 @@ class TasksResource @Inject() (
     val futureResponse = async {
       val tasksByAppId = await(
         Source(tasksIdToAppId)
-          .mapAsync(8){ case (taskId, _) => instanceTracker.instancesBySpec.map(_.instance(taskId)) }
+          .mapAsync(ConcurrentCallLimit){ case (taskId, _) => instanceTracker.instancesBySpec.map(_.instance(taskId)) }
           .mapConcat(_.toList)
           .runWith(Sink.seq)
           .map(_

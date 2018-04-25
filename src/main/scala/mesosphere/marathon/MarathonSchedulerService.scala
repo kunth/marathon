@@ -200,6 +200,7 @@ class MarathonSchedulerService @Inject() (
 
   override def startLeadership(): Unit = synchronized {
     log.info("As new leader running the driver")
+    val ConcurrentCallLimit = 8
 
     // allow interactions with the persistence store
     persistenceStore.markOpen()
@@ -215,7 +216,7 @@ class MarathonSchedulerService @Inject() (
     // run all pre-driver callbacks
     log.info(s"""Call preDriverStarts callbacks on ${prePostDriverCallbacks.mkString(", ")}""")
     Await.result(
-      Source(prePostDriverCallbacks.toList).mapAsync(8)(_.preDriverStarts).runWith(Sink.ignore),
+      Source(prePostDriverCallbacks.toList).mapAsync(ConcurrentCallLimit)(_.preDriverStarts).runWith(Sink.ignore),
       config.onElectedPrepareTimeout().millis
     )
     log.info("Finished preDriverStarts callbacks")

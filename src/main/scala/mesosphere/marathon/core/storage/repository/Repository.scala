@@ -51,5 +51,5 @@ trait VersionedRepository[Id, T] extends ReadOnlyVersionedRepository[Id, T] with
 }
 
 object RepositoryConstants {
-  val maxConcurrency = 8
+  val MaxConcurrency = 8
 }

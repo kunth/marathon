@@ -130,6 +130,8 @@ private[storage] trait ScanBehavior[K, C, S] extends StrictLogging { this: FSM[S
   val deploymentRepository: DeploymentRepositoryImpl[K, C, S]
   val self: ActorRef
 
+  private val ConcurrentCallLimit = 8
+
   when(Scanning) {
     case Event(RunGC, updates: UpdatedEntities) =>
       stay using updates.copy(gcRequested = true)
@@ -294,7 +296,7 @@ private[storage] trait ScanBehavior[K, C, S] extends StrictLogging { this: FSM[S
 
     def rootsInUse(): Future[Seq[StoredGroup]] =
       Source(storedPlans)
-        .mapAsync(8) { plan =>
+        .mapAsync(ConcurrentCallLimit) { plan =>
           for {
             originalRoot <- groupRepository.lazyRootVersion(plan.originalVersion)
             targetRoot <- groupRepository.lazyRootVersion(plan.targetVersion)
@@ -306,7 +308,7 @@ private[storage] trait ScanBehavior[K, C, S] extends StrictLogging { this: FSM[S
 
     def appsExceedingMaxVersions(usedApps: Set[PathId]): Future[Map[PathId, Set[OffsetDateTime]]] = {
       Source(usedApps)
-        .mapAsync(8) { id =>
+        .mapAsync(ConcurrentCallLimit) { id =>
           appRepository.versions(id).runWith(Sink.sortedSet).map(id -> _)
         }
         .filter(_._2.size > maxVersions)
@@ -315,7 +317,7 @@ private[storage] trait ScanBehavior[K, C, S] extends StrictLogging { this: FSM[S
 
     def podsExceedingMaxVersions(usedPods: Set[PathId]): Future[Map[PathId, Set[OffsetDateTime]]] = {
       Source(usedPods)
-        .mapAsync(8) { id =>
+        .mapAsync(ConcurrentCallLimit) { id =>
           podRepository.versions(id).runWith(Sink.sortedSet).map(id -> _)
         }
         .filter(_._2.size > maxVersions)
@@ -364,6 +366,8 @@ private[storage] trait CompactBehavior[K, C, S] extends StrictLogging { this: FS
   val podRepository: PodRepositoryImpl[K, C, S]
   val groupRepository: StoredGroupRepositoryImpl[K, C, S]
   val self: ActorRef
+
+  private val ConcurrentCallLimit = 8
 
   when(Compacting) {
     case Event(RunGC, blocked: BlockedEntities) =>
@@ -449,20 +453,20 @@ private[storage] trait CompactBehavior[K, C, S] extends StrictLogging { this: FS
           s"(${podVersionsToDelete.map { case (id, v) => id -> v.mkString("[", ", ", "]") }.mkString(", ")} as no roots refer to them" +
           " and they exceed max versions")
       }
-      val appFutures = Source(appsToDelete).mapAsync(8)(appRepository.delete).runWith(Sink.ignore)
+      val appFutures = Source(appsToDelete).mapAsync(ConcurrentCallLimit)(appRepository.delete).runWith(Sink.ignore)
       val appVersionFutures = Source(appVersionsToDelete)
         .flatMapConcat{
           case (id, versions) =>
-            Source(versions).mapAsync(8) { version => appRepository.deleteVersion(id, version) }
+            Source(versions).mapAsync(ConcurrentCallLimit) { version => appRepository.deleteVersion(id, version) }
         }
         .runWith(Sink.ignore)
-      val podFutures = Source(podsToDelete).mapAsync(8)(podRepository.delete).runWith(Sink.ignore)
+      val podFutures = Source(podsToDelete).mapAsync(ConcurrentCallLimit)(podRepository.delete).runWith(Sink.ignore)
       val podVersionFutures = Source(podVersionsToDelete)
         .flatMapConcat {
           case (id, versions) =>
-            Source(versions).mapAsync(8) { version => podRepository.deleteVersion(id, version) }
+            Source(versions).mapAsync(ConcurrentCallLimit) { version => podRepository.deleteVersion(id, version) }
         }.runWith(Sink.ignore)
-      val rootFutures = Source(rootVersionsToDelete).mapAsync(8)(groupRepository.deleteRootVersion).runWith(Sink.ignore)
+      val rootFutures = Source(rootVersionsToDelete).mapAsync(ConcurrentCallLimit)(groupRepository.deleteRootVersion).runWith(Sink.ignore)
       await(appFutures)
       await(appVersionFutures)
       await(podFutures)

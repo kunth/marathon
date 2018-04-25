@@ -47,6 +47,8 @@ class GroupManagerImpl(
     */
   private[this] val root = LockedVar(initialRoot)
 
+  private val ConcurrentCallLimit = 8
+
   @SuppressWarnings(Array("OptionGet"))
   override def rootGroup(): RootGroup =
     root.get() match { // linter:ignore:UseGetOrElseNotPatMatch
@@ -65,7 +67,7 @@ class GroupManagerImpl(
   override def rootGroupOption(): Option[RootGroup] = root.get()
 
   override def versions(id: PathId): Source[Timestamp, NotUsed] = {
-    groupRepository.rootVersions().mapAsync(Int.MaxValue) { version =>
+    groupRepository.rootVersions().mapAsync(ConcurrentCallLimit) { version =>
       groupRepository.rootVersion(version)
     }.collect { case Some(g) if g.group(id).isDefined => g.version }
   }

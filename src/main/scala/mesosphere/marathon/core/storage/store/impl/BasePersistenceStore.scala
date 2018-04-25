@@ -41,6 +41,8 @@ abstract class BasePersistenceStore[K, Category, Serialized](implicit
   private val storeTimer: Timer = Metrics.timer(ServiceMetric, getClass, "store")
   private val versionTimer: Timer = Metrics.timer(ServiceMetric, getClass, "versions")
 
+  private val ConcurrentCallLimit = 8
+
   private[this] lazy val lock = KeyedLock[String]("persistenceStore", Int.MaxValue)
 
   protected def rawIds(id: Category): Source[K, NotUsed]
@@ -118,13 +120,13 @@ abstract class BasePersistenceStore[K, Category, Serialized](implicit
     ir: IdResolver[Id, V, Category, K],
     um: Unmarshaller[Serialized, V]): Source[V, NotUsed] = {
 
-    Source(list).mapAsync[Option[Serialized]](Int.MaxValue) {
+    Source(list).mapAsync[Option[Serialized]](ConcurrentCallLimit) {
       case (id, version) =>
         val storageId = ir.toStorageId(id, Some(version))
         rawGet(storageId)
     }.collect {
       case Some(marshaled) => marshaled
-    }.mapAsync(Int.MaxValue) { marshaled =>
+    }.mapAsync(ConcurrentCallLimit) { marshaled =>
       Unmarshal(marshaled).to[V]
     }
   }

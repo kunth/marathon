@@ -35,6 +35,8 @@ case class StoredGroup(
     dependencies: Set[PathId],
     version: OffsetDateTime) extends StrictLogging {
 
+  private val ConcurrentCallLimit = 8
+
   lazy val transitiveAppIds: Map[PathId, OffsetDateTime] = appIds ++ storedGroups.flatMap(_.appIds)
   lazy val transitivePodIds: Map[PathId, OffsetDateTime] = podIds ++ storedGroups.flatMap(_.podIds)
 
@@ -42,14 +44,14 @@ case class StoredGroup(
   def resolve(
     appRepository: AppRepository,
     podRepository: PodRepository)(implicit ctx: ExecutionContext, mat: Materializer): Future[Group] = async { // linter:ignore UnnecessaryElseBranch
-    val appFutures = Source(appIds).mapAsync(8) {
+    val appFutures = Source(appIds).mapAsync(ConcurrentCallLimit) {
       case (appId, appVersion) => appRepository.getVersion(appId, appVersion).recover {
         case NonFatal(ex) =>
           logger.error(s"Failed to load $appId:$appVersion for group $id ($version)", ex)
           throw ex
       }
     }.runWith(Sink.seq)
-    val podFutures = Source(podIds).mapAsync(8) {
+    val podFutures = Source(podIds).mapAsync(ConcurrentCallLimit) {
       case (podId, podVersion) => podRepository.getVersion(podId, podVersion).recover {
         case NonFatal(ex) =>
           logger.error(s"Failed to load $podId:$podVersion for group $id ($version)", ex)
@@ -57,7 +59,7 @@ case class StoredGroup(
       }
     }.runWith(Sink.seq)
 
-    val groupFutures = Source(storedGroups).mapAsync(8)(_.resolve(appRepository, podRepository)).runWith(Sink.seq)
+    val groupFutures = Source(storedGroups).mapAsync(ConcurrentCallLimit)(_.resolve(appRepository, podRepository)).runWith(Sink.seq)
 
     val allApps = await(appFutures)
     if (allApps.exists(_.isEmpty)) {
@@ -290,10 +292,10 @@ class StoredGroupRepositoryImpl[K, C, S](
         rootFuture = promise.future
         old
       }
-      val storeAppFutures = Source(updatedApps).mapAsync(8)(appRepository.store).runWith(Sink.ignore)
-      val storePodFutures = Source(updatedPods).mapAsync(8)(podRepository.store).runWith(Sink.ignore)
-      val deleteAppFutures = Source(deletedApps).mapAsync(8)(appRepository.deleteCurrent).runWith(Sink.ignore)
-      val deletePodFutures = Source(deletedPods).mapAsync(8)(podRepository.deleteCurrent).runWith(Sink.ignore)
+      val storeAppFutures = Source(updatedApps).mapAsync(ConcurrentCallLimit)(appRepository.store).runWith(Sink.ignore)
+      val storePodFutures = Source(updatedPods).mapAsync(ConcurrentCallLimit)(podRepository.store).runWith(Sink.ignore)
+      val deleteAppFutures = Source(deletedApps).mapAsync(ConcurrentCallLimit)(appRepository.deleteCurrent).runWith(Sink.ignore)
+      val deletePodFutures = Source(deletedPods).mapAsync(ConcurrentCallLimit)(podRepository.deleteCurrent).runWith(Sink.ignore)
       val storedApps = await(storeAppFutures.asTry)
       val storedPods = await(storePodFutures.asTry)
       await(deleteAppFutures.recover { case NonFatal(e) => Done })
@@ -344,8 +346,8 @@ class StoredGroupRepositoryImpl[K, C, S](
         case _ =>
       }
 
-      val storeAppFutures = Source(updatedApps).mapAsync(8)(appRepository.store).runWith(Sink.ignore)
-      val storePodFutures = Source(updatedPods).mapAsync(8)(podRepository.store).runWith(Sink.ignore)
+      val storeAppFutures = Source(updatedApps).mapAsync(ConcurrentCallLimit)(appRepository.store).runWith(Sink.ignore)
+      val storePodFutures = Source(updatedPods).mapAsync(ConcurrentCallLimit)(podRepository.store).runWith(Sink.ignore)
       val storedApps = await(Future.sequence(Seq(storeAppFutures, storePodFutures)).asTry)
 
       storedApps match {
@@ -387,4 +389,6 @@ class StoredGroupRepositoryImpl[K, C, S](
 
 object StoredGroupRepositoryImpl {
   val RootId = PathId.empty
+  private val ConcurrentCallLimit = 8
+
 }

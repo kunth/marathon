@@ -29,6 +29,9 @@ import scala.async.Async.{ async, await }
 import scala.concurrent.{ ExecutionContext, Future }
 import scala.util.control.NonFatal
 import scala.util.{ Failure, Success }
+import akka.pattern.ask
+import akka.util.Timeout
+import scala.concurrent.duration._
 
 class MarathonSchedulerActor private (
     groupRepository: GroupRepository,
@@ -207,9 +210,12 @@ class MarathonSchedulerActor private (
     case msg => logger.warn(s"Received unexpected message from ${sender()}: $msg")
   }
 
-  def scaleRunSpecs(): Unit = {
-    groupRepository.root().foreach { root =>
-      root.transitiveRunSpecs.foreach(spec => self ! ScaleRunSpec(spec.id))
+  def scaleRunSpecs(): Future[Done] = {
+    implicit val timeout: Timeout = Timeout(10.seconds)
+    groupRepository.root().flatMap { root =>
+      Source(root.transitiveRunSpecs).mapAsync(ConcurrentCallLimit) { spec =>
+        self ? ScaleRunSpec(spec.id)
+      }.runWith(Sink.ignore)
     }
   }
 
@@ -361,6 +367,8 @@ object MarathonSchedulerActor {
   case class DeploymentFinished(plan: DeploymentPlan) extends Event
   case class TasksKilled(runSpecId: PathId, taskIds: Seq[Instance.Id]) extends Event
   case class CommandFailed(cmd: Command, reason: Throwable) extends Event
+
+  val ConcurrentCallLimit = 8
 }
 
 class SchedulerActions(

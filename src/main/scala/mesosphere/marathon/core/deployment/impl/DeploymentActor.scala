@@ -41,6 +41,8 @@ private class DeploymentActor(
 
   implicit val mat = ActorMaterializer(ActorMaterializerSettings(context.system))
 
+  private val ConcurrentCallLimit = 8
+
   val steps = plan.steps.iterator
   var currentStepNr: Int = 0
 
@@ -111,7 +113,7 @@ private class DeploymentActor(
       val status = DeploymentStatus(plan, step)
       eventBus.publish(status)
 
-      val futures = Source(step.actions).mapAsync(8) { action =>
+      val futures = Source(step.actions).mapAsync(ConcurrentCallLimit) { action =>
         action.runSpec match {
           case app: AppDefinition => healthCheckManager.addAllFor(app, Seq.empty)
           case pod: PodDefinition => //ignore: no marathon based health check for pods

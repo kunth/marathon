@@ -155,18 +155,20 @@ private[appinfo] class DefaultInfoService(
       queryGroup(group)
     }
 
+  private val ConcurrentCallLimit = 8
+
   private[this] def resolveAppInfos(
     specs: Seq[RunSpec],
     embed: Set[AppInfo.Embed],
     baseData: AppInfoBaseData = newBaseData()): Source[AppInfo, NotUsed] =
     Source(specs)
       .collect { case app: AppDefinition => app }
-      .mapAsync(8) { app => baseData.appInfoFuture(app, embed) }
+      .mapAsync(ConcurrentCallLimit) { app => baseData.appInfoFuture(app, embed) }
 
   private[this] def resolvePodInfos(
     specs: Seq[RunSpec],
     baseData: AppInfoBaseData): Source[PodStatus, NotUsed] =
     Source(specs)
       .collect { case pod: PodDefinition => pod }
-      .mapAsync(8) { pod => baseData.podStatus(pod) }
+      .mapAsync(ConcurrentCallLimit) { pod => baseData.podStatus(pod) }
 }

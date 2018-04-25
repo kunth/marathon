@@ -36,6 +36,8 @@ class MarathonHealthCheckManager(
     instanceTracker: InstanceTracker,
     groupManager: GroupManager)(implicit mat: Materializer) extends HealthCheckManager {
 
+  private val ConcurrentCallLimit = 8
+
   protected[this] case class ActiveHealthCheck(
       healthCheck: HealthCheck,
       actor: ActorRef)
@@ -177,7 +179,7 @@ class MarathonHealthCheckManager(
       // add missing health checks for the current
       // reconcile all running versions of the current app
       val appVersionsWithoutHealthChecks: Set[Timestamp] = activeAppVersions -- healthCheckAppVersions
-      val res = Source(appVersionsWithoutHealthChecks).mapAsync(8) { version =>
+      val res = Source(appVersionsWithoutHealthChecks).mapAsync(ConcurrentCallLimit) { version =>
         groupManager.appVersion(appId, version.toOffsetDateTime).map {
           case None =>
             // FIXME: If the app version of the task is not available anymore, no health check is started.
@@ -197,7 +199,7 @@ class MarathonHealthCheckManager(
 
     async {
       val instances = await(instanceTracker.instancesBySpec())
-      val reconciledApps = Source(apps).mapAsync(8)(app => reconcileApp(app, instances.specInstances(app.id))).runWith(Sink.ignore)
+      val reconciledApps = Source(apps).mapAsync(ConcurrentCallLimit)(app => reconcileApp(app, instances.specInstances(app.id))).runWith(Sink.ignore)
       await(reconciledApps)
     }
   }
@@ -245,7 +247,7 @@ class MarathonHealthCheckManager(
           .collect {
             case ActiveHealthCheck(_, actor) => actor
           }
-          .mapAsync(8) {
+          .mapAsync(ConcurrentCallLimit) {
             actorRef => (actorRef ? GetInstanceHealth(instanceId)).mapTo[Health]
           }
           .runWith(Sink.seq)
@@ -258,7 +260,7 @@ class MarathonHealthCheckManager(
       Source(ahcs(appId).values.toList)
         .mapConcat(identity)
         .collect { case ActiveHealthCheck(_, actor) => actor }
-        .mapAsync(8) { actor =>
+        .mapAsync(ConcurrentCallLimit) { actor =>
           (actor ? GetAppHealth).mapTo[AppHealth]
         }
         .mapConcat(_.health)

@@ -56,6 +56,8 @@ class PodsResource @Inject() (
   private implicit val normalizer = PodNormalization.apply(PodNormalization.Configuration(
     config.defaultNetworkName.get))
 
+  private val ConcurrentCallLimit = 8
+
   // If we can normalize using the internal model, do that instead.
   // The version of the pod is changed here to make sure, the user has not send a version.
   private def normalize(pod: PodDefinition): PodDefinition = pod.copy(versionInfo = VersionInfo.OnlyVersion(clock.now()))
@@ -236,7 +238,7 @@ class PodsResource @Inject() (
   @Path("::status")
   @SuppressWarnings(Array("OptionGet", "FilterOptionAndGet"))
   def allStatus(@Context req: HttpServletRequest): Response = authenticated(req) { implicit identity =>
-    val future = Source(podSystem.ids()).mapAsync(8) { id =>
+    val future = Source(podSystem.ids()).mapAsync(ConcurrentCallLimit) { id =>
       podStatusService.selectPodStatus(id, authzSelector)
     }.filter(_.isDefined).map(_.get).runWith(Sink.seq)
 

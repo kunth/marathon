@@ -19,11 +19,13 @@ private[tracker] class InstancesLoaderImpl(repo: InstanceRepository)(implicit va
 
   private[this] val log = LoggerFactory.getLogger(getClass.getName)
 
+  private val ConcurrentCallLimit = 8
+
   override def load(): Future[InstanceTracker.InstancesBySpec] = {
     for {
       names <- repo.ids().runWith(Sink.seq)
       _ = log.info(s"About to load ${names.size} tasks")
-      instances <- Source(names).mapAsync(8)(repo.get).mapConcat(_.toList).runWith(Sink.seq)
+      instances <- Source(names).mapAsync(ConcurrentCallLimit)(repo.get).mapConcat(_.toList).runWith(Sink.seq)
     } yield {
       log.info(s"Loaded ${instances.size} tasks")
       InstanceTracker.InstancesBySpec.forInstances(instances)

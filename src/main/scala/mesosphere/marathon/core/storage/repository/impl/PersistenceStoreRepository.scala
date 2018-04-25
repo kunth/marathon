@@ -24,6 +24,8 @@ class PersistenceStoreRepository[Id, V, K, C, S](
     marshaller: Marshaller[V, S],
     unmarshaller: Unmarshaller[S, V]) extends Repository[Id, V] {
 
+  private val ConcurrentCallLimit = 8
+
   override def ids(): Source[Id, NotUsed] = persistenceStore.ids()
 
   override def get(id: Id): Future[Option[V]] = persistenceStore.get(id)
@@ -32,8 +34,7 @@ class PersistenceStoreRepository[Id, V, K, C, S](
 
   override def store(v: V): Future[Done] = persistenceStore.store(extractId(v), v)
 
-  // Assume that the underlying store can limit its own concurrency.
-  override def all(): Source[V, NotUsed] = ids().mapAsync(Int.MaxValue)(get).collect { case Some(x) => x }
+  override def all(): Source[V, NotUsed] = ids().mapAsync(ConcurrentCallLimit)(get).collect { case Some(x) => x }
 }
 
 /**

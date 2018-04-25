@@ -128,7 +128,7 @@ class ZkPersistenceStore(
           case _: NoNodeException => Children(category, new Stat(), Nil)
         }).children
 
-        Source(buckets).mapAsync(8) { bucket =>
+        Source(buckets).mapAsync(maxConcurrent) { bucket =>
           retry(s"ZkPersistenceStore::ids($category/$bucket)") {
             client.children(s"/$category/$bucket").map(_.children)
           }

@@ -62,6 +62,8 @@ private[impl] class LaunchQueueActor(
   /** The timeout for asking any children of this actor. */
   implicit val askTimeout: Timeout = launchQueueConfig.launchQueueRequestTimeout().milliseconds
 
+  private val ConcurrentCallLimit = 8
+
   override def receive: Receive = LoggingReceive {
     Seq(
       receiveHandlePurging,
@@ -157,7 +159,7 @@ private[impl] class LaunchQueueActor(
 
   private[this] def list(): Future[Seq[QueuedInstanceInfo]] = {
     Source(launchers.keySet)
-      .mapAsync(8)(appId => (self ? Count(appId)).mapTo[Option[QueuedInstanceInfo]])
+      .mapAsync(ConcurrentCallLimit)(appId => (self ? Count(appId)).mapTo[Option[QueuedInstanceInfo]])
       .mapConcat(_.toList)
       .runWith(Sink.seq)
   }
