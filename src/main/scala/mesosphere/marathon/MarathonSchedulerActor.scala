@@ -4,7 +4,7 @@ import akka.Done
 import akka.actor._
 import akka.pattern.pipe
 import akka.event.{ EventStream, LoggingReceive }
-import akka.stream.{ ActorMaterializer, ActorMaterializerSettings, Materializer }
+import akka.stream.Materializer
 import akka.stream.scaladsl.{ Sink, Source }
 import com.typesafe.scalalogging.StrictLogging
 import mesosphere.marathon.core.deployment.{ DeploymentManager, DeploymentPlan, ScalingProposition }
