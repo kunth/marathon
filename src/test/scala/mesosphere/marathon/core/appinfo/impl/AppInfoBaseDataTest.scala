@@ -105,7 +105,7 @@ class AppInfoBaseDataTest extends AkkaUnitTest with GroupCreation {
     "requesting an app with 0 instances" in {
       val f = new Fixture
       Given("one app with 0 instances")
-      import scala.concurrent.ExecutionContext.Implicits.global
+
       f.instanceTracker.instancesBySpec() returns
         Future.successful(InstanceTracker.InstancesBySpec.forInstances(Seq.empty[Instance]))
       f.healthCheckManager.statuses(app.id) returns Future.successful(Map.empty[Instance.Id, Seq[Health]])
@@ -125,7 +125,6 @@ class AppInfoBaseDataTest extends AkkaUnitTest with GroupCreation {
       val task1: Task = instance1.appTask
       val task2: Task = instance2.appTask
 
-      import scala.concurrent.ExecutionContext.Implicits.global
       f.instanceTracker.instancesBySpec() returns
         Future.successful(InstanceTracker.InstancesBySpec.forInstances(instance1, instance2))
       f.healthCheckManager.statuses(app.id) returns Future.successful(Map.empty[Instance.Id, Seq[Health]])
@@ -148,7 +147,6 @@ class AppInfoBaseDataTest extends AkkaUnitTest with GroupCreation {
       val running2: Instance = builder2.getInstance()
       val running3: Instance = builder3.getInstance()
 
-      import scala.concurrent.ExecutionContext.Implicits.global
       f.instanceTracker.instancesBySpec() returns
         Future.successful(InstanceTracker.InstancesBySpec.forInstances(builder1.getInstance(), builder2.getInstance(), builder3.getInstance()))
 
@@ -204,7 +202,6 @@ class AppInfoBaseDataTest extends AkkaUnitTest with GroupCreation {
       val running2Builder = TestInstanceBuilder.newBuilder(f.runSpecId).addTaskRunning()
       val running2: Instance = running2Builder.getInstance()
 
-      import scala.concurrent.ExecutionContext.Implicits.global
       f.instanceTracker.instancesBySpec() returns
         Future.successful(InstanceTracker.InstancesBySpec.forInstances(stagedBuilder.getInstance(), runningBuilder.getInstance(), running2Builder.getInstance()))
 
@@ -356,7 +353,6 @@ class AppInfoBaseDataTest extends AkkaUnitTest with GroupCreation {
       val running2Builder = TestInstanceBuilder.newBuilder(f.runSpecId).addTaskRunning(stagedAt = Timestamp((f.clock.now() - 11.seconds).millis))
       val running2: Instance = running2Builder.getInstance()
 
-      import scala.concurrent.ExecutionContext.Implicits.global
       val instances = Seq(stagedBuilder.getInstance(), runningBuilder.getInstance(), running2Builder.getInstance())
       f.instanceTracker.instancesBySpec() returns
         Future.successful(InstanceTracker.InstancesBySpec.forInstances(instances))
@@ -482,7 +478,6 @@ class AppInfoBaseDataTest extends AkkaUnitTest with GroupCreation {
       Given("a pod definition")
       val instance1 = f.fakeInstance(pod)
 
-      import scala.concurrent.ExecutionContext.Implicits.global
       f.instanceTracker.instancesBySpec() returns
         Future.successful(InstanceTracker.InstancesBySpec.forInstances(instance1))
 
@@ -497,7 +492,6 @@ class AppInfoBaseDataTest extends AkkaUnitTest with GroupCreation {
     }
 
     "requesting Pod lastTaskFailure when one exists" in {
-      import concurrent.ExecutionContext.Implicits.global
       val f = new Fixture
       Given("A pod definition")
       val taskFailure = TaskFailureTestHelper.taskFailure

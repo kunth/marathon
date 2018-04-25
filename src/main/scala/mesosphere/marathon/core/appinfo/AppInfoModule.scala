@@ -4,7 +4,7 @@ package core.appinfo
 import java.time.Clock
 
 import akka.actor.ActorSystem
-import akka.stream.{ ActorMaterializer, ActorMaterializerSettings }
+import akka.stream.ActorMaterializer
 import com.google.inject.Inject
 import mesosphere.marathon.core.appinfo.impl.{ AppInfoBaseData, DefaultInfoService }
 import mesosphere.marathon.core.group.GroupManager

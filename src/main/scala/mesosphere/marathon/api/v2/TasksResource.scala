@@ -4,7 +4,7 @@ package api.v2
 import java.util
 
 import akka.actor.ActorSystem
-import akka.stream.{ ActorMaterializer, ActorMaterializerSettings }
+import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{ Sink, Source }
 import javax.inject.Inject
 import javax.servlet.http.HttpServletRequest
