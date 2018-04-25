@@ -1,7 +1,8 @@
 package mesosphere.marathon
 package core.appinfo.impl
 
-import mesosphere.UnitTest
+import akka.stream.ActorMaterializer
+import mesosphere.AkkaUnitTest
 import mesosphere.marathon.core.appinfo.{ AppInfo, EnrichedTask, TaskCounts, TaskStatsByVersion }
 import mesosphere.marathon.test.SettableClock
 import mesosphere.marathon.core.condition.Condition
@@ -25,7 +26,7 @@ import scala.collection.immutable.{ Map, Seq }
 import scala.concurrent.Future
 import scala.concurrent.duration._
 
-class AppInfoBaseDataTest extends UnitTest with GroupCreation {
+class AppInfoBaseDataTest extends AkkaUnitTest with GroupCreation {
 
   class Fixture {
     val runSpecId = PathId("/test")
@@ -36,7 +37,7 @@ class AppInfoBaseDataTest extends UnitTest with GroupCreation {
     lazy val taskFailureRepository = mock[TaskFailureRepository]
     lazy val groupManager = mock[GroupManager]
 
-    import scala.concurrent.ExecutionContext.Implicits.global
+    implicit val mat = ActorMaterializer()
 
     lazy val baseData = new AppInfoBaseData(
       clock,

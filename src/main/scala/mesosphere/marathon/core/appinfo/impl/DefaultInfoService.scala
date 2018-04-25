@@ -1,6 +1,9 @@
 package mesosphere.marathon
 package core.appinfo.impl
 
+import akka.NotUsed
+import akka.stream.Materializer
+import akka.stream.scaladsl.{ Sink, Source }
 import com.typesafe.scalalogging.StrictLogging
 import mesosphere.marathon.core.appinfo.AppInfo.Embed
 import mesosphere.marathon.core.appinfo._
@@ -17,7 +20,7 @@ import scala.concurrent.{ ExecutionContext, Future }
 
 private[appinfo] class DefaultInfoService(
     groupManager: GroupManager,
-    newBaseData: () => AppInfoBaseData)(implicit ec: ExecutionContext)
+    newBaseData: () => AppInfoBaseData)(implicit ec: ExecutionContext, mat: Materializer)
   extends AppInfoService with GroupInfoService with PodStatusService with StrictLogging {
 
   @SuppressWarnings(Array("all")) // async/await
@@ -45,7 +48,7 @@ private[appinfo] class DefaultInfoService(
       logger.debug("queryAll")
       val rootGroup = groupManager.rootGroup()
       val selectedApps: IndexedSeq[AppDefinition] = rootGroup.transitiveApps.filterAs(selector.matches)(collection.breakOut)
-      val infos = await(resolveAppInfos(selectedApps, embed))
+      val infos = await(resolveAppInfos(selectedApps, embed).runWith(Sink.seq))
       infos
     }
 
@@ -59,7 +62,7 @@ private[appinfo] class DefaultInfoService(
       val maybeApps: Option[IndexedSeq[AppDefinition]] =
         maybeGroup.map(_.transitiveApps.filterAs(selector.matches)(collection.breakOut))
       maybeApps match {
-        case Some(selectedApps) => await(resolveAppInfos(selectedApps, embed))
+        case Some(selectedApps) => await(resolveAppInfos(selectedApps, embed).runWith(Sink.seq))
         case None => Seq.empty
       }
     }
@@ -100,7 +103,7 @@ private[appinfo] class DefaultInfoService(
         if (groupEmbedApps) {
           val filteredApps: IndexedSeq[AppDefinition] =
             group.transitiveApps.filterAs(selectors.appSelector.matches)(collection.breakOut)
-          await(resolveAppInfos(filteredApps, appEmbed, cachedBaseData.value)).map {
+          await(resolveAppInfos(filteredApps, appEmbed, cachedBaseData.value).runWith(Sink.seq)).map {
             info => info.app.id -> info
           }(collection.breakOut)
         } else {
@@ -111,7 +114,7 @@ private[appinfo] class DefaultInfoService(
         if (groupEmbedPods) {
           val filteredPods: IndexedSeq[PodDefinition] =
             group.transitivePods.filterAs(selectors.podSelector.matches)(collection.breakOut)
-          await(resolvePodInfos(filteredPods, cachedBaseData.value)).map { status =>
+          await(resolvePodInfos(filteredPods, cachedBaseData.value).runWith(Sink.seq)).map { status =>
             PathId(status.id) -> status
           }(collection.breakOut)
         } else {
@@ -155,15 +158,15 @@ private[appinfo] class DefaultInfoService(
   private[this] def resolveAppInfos(
     specs: Seq[RunSpec],
     embed: Set[AppInfo.Embed],
-    baseData: AppInfoBaseData = newBaseData()): Future[Seq[AppInfo]] = Future.sequence(specs.collect {
-    case app: AppDefinition =>
-      baseData.appInfoFuture(app, embed)
-  })
+    baseData: AppInfoBaseData = newBaseData()): Source[AppInfo, NotUsed] =
+    Source(specs)
+      .collect { case app: AppDefinition => app }
+      .mapAsync(8) { app => baseData.appInfoFuture(app, embed) }
 
   private[this] def resolvePodInfos(
     specs: Seq[RunSpec],
-    baseData: AppInfoBaseData): Future[Seq[PodStatus]] = Future.sequence(specs.collect {
-    case pod: PodDefinition =>
-      baseData.podStatus(pod)
-  })
+    baseData: AppInfoBaseData): Source[PodStatus, NotUsed] =
+    Source(specs)
+      .collect { case pod: PodDefinition => pod }
+      .mapAsync(8) { pod => baseData.podStatus(pod) }
 }

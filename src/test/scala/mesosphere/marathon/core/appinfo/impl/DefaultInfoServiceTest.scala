@@ -1,15 +1,21 @@
 package mesosphere.marathon
 package core.appinfo.impl
 
+import akka.actor.ActorSystem
+import akka.stream.ActorMaterializer
 import mesosphere.UnitTest
 import mesosphere.marathon.core.appinfo.{ AppInfo, GroupInfo, _ }
 import mesosphere.marathon.core.group.GroupManager
 import mesosphere.marathon.state._
 import mesosphere.marathon.test.GroupCreation
+import org.scalatest.BeforeAndAfterAll
 
 import scala.concurrent.Future
 
-class DefaultInfoServiceTest extends UnitTest with GroupCreation {
+class DefaultInfoServiceTest extends UnitTest with GroupCreation with BeforeAndAfterAll {
+
+  implicit val system = ActorSystem("DefaultInfoServiceTest")
+
   "DefaultInfoService" should {
     "queryForAppId" in {
       Given("a group repo with some apps")
@@ -244,12 +250,17 @@ class DefaultInfoServiceTest extends UnitTest with GroupCreation {
     }
   }
 
+  override protected def afterAll(): Unit = {
+    system.terminate().futureValue
+  }
+
   class Fixture {
     lazy val groupManager = mock[GroupManager]
     lazy val baseData = mock[AppInfoBaseData]
     def newBaseData(): AppInfoBaseData = baseData
 
     import scala.concurrent.ExecutionContext.Implicits.global
+    implicit val mat = ActorMaterializer()
     lazy val infoService = new DefaultInfoService(groupManager, newBaseData)
 
     def verifyNoMoreInteractions(): Unit = {

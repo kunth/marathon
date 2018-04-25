@@ -2,11 +2,12 @@ package mesosphere.marathon
 
 import java.util.concurrent.CountDownLatch
 import java.util.{ Timer, TimerTask }
-import javax.inject.{ Inject, Named }
 
+import javax.inject.{ Inject, Named }
 import akka.Done
 import akka.actor.{ ActorRef, ActorSystem }
 import akka.stream.Materializer
+import akka.stream.scaladsl.Source
 import akka.util.Timeout
 import com.google.common.util.concurrent.AbstractExecutionThreadService
 import mesosphere.marathon.MarathonSchedulerActor._
@@ -214,7 +215,7 @@ class MarathonSchedulerService @Inject() (
     // run all pre-driver callbacks
     log.info(s"""Call preDriverStarts callbacks on ${prePostDriverCallbacks.mkString(", ")}""")
     Await.result(
-      Future.sequence(prePostDriverCallbacks.map(_.preDriverStarts)),
+      Source(prePostDriverCallbacks.toList).mapAsync(8)(_.preDriverStarts).runWith(Sink.ignore),
       config.onElectedPrepareTimeout().millis
     )
     log.info("Finished preDriverStarts callbacks")

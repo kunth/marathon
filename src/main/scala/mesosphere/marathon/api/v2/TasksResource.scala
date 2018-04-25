@@ -2,11 +2,14 @@ package mesosphere.marathon
 package api.v2
 
 import java.util
+
+import akka.actor.ActorSystem
+import akka.stream.{ ActorMaterializer, ActorMaterializerSettings }
+import akka.stream.scaladsl.{ Sink, Source }
 import javax.inject.Inject
 import javax.servlet.http.HttpServletRequest
 import javax.ws.rs._
 import javax.ws.rs.core.{ Context, MediaType, Response }
-
 import mesosphere.marathon.api.EndpointsHelper.ListTasks
 import mesosphere.marathon.api.{ EndpointsHelper, MarathonMediaType, TaskKiller, _ }
 import mesosphere.marathon.core.appinfo.EnrichedTask
@@ -37,10 +40,13 @@ class TasksResource @Inject() (
     groupManager: GroupManager,
     healthCheckManager: HealthCheckManager,
     val authenticator: Authenticator,
-    val authorizer: Authorizer) extends AuthResource {
+    val authorizer: Authorizer,
+    system: ActorSystem) extends AuthResource {
 
   val log = LoggerFactory.getLogger(getClass.getName)
   implicit val ec = ExecutionContext.Implicits.global
+
+  implicit val materializer = ActorMaterializer()(system)
 
   @GET
   @Produces(Array(MarathonMediaType.PREFERRED_APPLICATION_JSON))
@@ -64,9 +70,10 @@ class TasksResource @Inject() (
       }
 
       val health = await(
-        Future.sequence(appIds.map { appId =>
+        Source(appIds).mapAsync(8) { appId =>
           healthCheckManager.statuses(appId)
-        })).foldLeft(Map[Id, Seq[Health]]())(_ ++ _)
+        }.runFold(Map[Id, Seq[Health]]())(_ ++ _)
+      )
 
       val enrichedTasks: Iterable[Iterable[EnrichedTask]] = for {
         (appId, instances) <- instancesBySpec.instancesMap
@@ -135,11 +142,12 @@ class TasksResource @Inject() (
       // FIXME (gkleiman): taskKiller.kill a few lines below also checks authorization, but we need to check ALL before
       // starting to kill tasks
       affectedApps.foreach(checkAuthorization(UpdateRunSpec, _))
-      val killed = await(Future.sequence(toKill
+      val killed = await(Source(toKill)
         .filter { case (appId, _) => affectedApps.exists(app => app.id == appId) }
-        .map {
-          case (appId, instances) => taskKiller.kill(appId, _ => instances, wipe)
-        })).flatten
+        .mapAsync(8) { case (appId, instances) => taskKiller.kill(appId, _ => instances, wipe) }
+        .mapConcat(Predef.identity)
+        .runWith(Sink.seq)
+      )
       ok(jsonObjString("tasks" -> killed.flatMap { instance =>
         instance.tasksMap.valuesIterator.map { task =>
           EnrichedTask(instance, task, Nil).toRaml
@@ -148,11 +156,16 @@ class TasksResource @Inject() (
     }
 
     val futureResponse = async {
-      val maybeInstances: Iterable[Option[Instance]] = await(Future.sequence(tasksIdToAppId.view
-        .map { case (taskId, _) => instanceTracker.instancesBySpec.map(_.instance(taskId)) }))
-      val tasksByAppId: Map[PathId, Seq[Instance]] = maybeInstances.flatten
-        .groupBy(instance => instance.instanceId.runSpecId)
-        .map { case (appId, instances) => appId -> instances.to[Seq] }(collection.breakOut)
+      val tasksByAppId = await(
+        Source(tasksIdToAppId)
+          .mapAsync(8){ case (taskId, _) => instanceTracker.instancesBySpec.map(_.instance(taskId)) }
+          .mapConcat(_.toList)
+          .runWith(Sink.seq)
+          .map(_
+            .groupBy(instance => instance.instanceId.runSpecId)
+            .map { case (appId, instances) => appId -> instances }
+          )
+      )
       val response =
         if (scale) scaleAppWithKill(tasksByAppId)
         else doKillTasks(tasksByAppId)

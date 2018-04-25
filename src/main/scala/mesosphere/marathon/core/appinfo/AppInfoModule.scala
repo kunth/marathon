@@ -3,6 +3,8 @@ package core.appinfo
 
 import java.time.Clock
 
+import akka.actor.ActorSystem
+import akka.stream.{ ActorMaterializer, ActorMaterializerSettings }
 import com.google.inject.Inject
 import mesosphere.marathon.core.appinfo.impl.{ AppInfoBaseData, DefaultInfoService }
 import mesosphere.marathon.core.group.GroupManager
@@ -21,7 +23,8 @@ class AppInfoModule @Inject() (
     healthCheckManager: HealthCheckManager,
     marathonSchedulerService: MarathonSchedulerService,
     taskFailureRepository: TaskFailureRepository,
-    config: MarathonConf) {
+    config: MarathonConf,
+    system: ActorSystem) {
 
   val appInfoEc = (NamedExecutionContext.fixedThreadPoolExecutionContext(config.asInstanceOf[AppInfoConfig].appInfoModuleExecutionContextSize(), "app-info-module"))
   private[this] val appInfoBaseData = () => new AppInfoBaseData(
@@ -30,7 +33,7 @@ class AppInfoModule @Inject() (
     healthCheckManager,
     marathonSchedulerService,
     taskFailureRepository,
-    groupManager)(appInfoEc)
+    groupManager)(appInfoEc, ActorMaterializer()(system))
 
   def appInfoService: AppInfoService = infoService
   def groupInfoService: GroupInfoService = infoService
@@ -39,5 +42,5 @@ class AppInfoModule @Inject() (
   val defaultInfoEc = NamedExecutionContext.fixedThreadPoolExecutionContext(config.asInstanceOf[AppInfoConfig].defaultInfoServiceExecutionContextSize(), "default-info-service")
   private[this] lazy val infoService = new DefaultInfoService(
     groupManager,
-    appInfoBaseData)(defaultInfoEc)
+    appInfoBaseData)(defaultInfoEc, ActorMaterializer()(system))
 }

@@ -4,6 +4,8 @@ package core.task.jobs.impl
 import java.time.Clock
 
 import akka.actor._
+import akka.stream.{ ActorMaterializer, ActorMaterializerSettings, Materializer }
+import akka.stream.scaladsl.{ Sink, Source }
 import com.typesafe.scalalogging.StrictLogging
 import mesosphere.marathon.core.condition.Condition
 import mesosphere.marathon.core.instance.Instance
@@ -36,7 +38,7 @@ private[jobs] object OverdueTasksActor {
       clock: Clock) extends StrictLogging {
     import scala.concurrent.ExecutionContext.Implicits.global
 
-    def check(): Future[Unit] = {
+    def check()(implicit mat: Materializer): Future[Unit] = {
       val now = clock.now()
       logger.debug("Checking for overdue tasks")
       instanceTracker.instancesBySpec().flatMap { tasksByApp =>
@@ -82,12 +84,12 @@ private[jobs] object OverdueTasksActor {
       instances.filter(instance => instance.tasksMap.valuesIterator.exists(launchedAndExpired))
     }
 
-    private[this] def timeoutOverdueReservations(now: Timestamp, instances: Seq[Instance]): Future[Unit] = {
-      val taskTimeoutResults = overdueReservations(now, instances).map { instance =>
+    private[this] def timeoutOverdueReservations(now: Timestamp, instances: Seq[Instance])(implicit mat: Materializer): Future[Unit] = {
+      val taskTimeoutResults = Source(overdueReservations(now, instances)).mapAsync(8) { instance =>
         logger.warn("Scheduling ReservationTimeout for {}", instance.instanceId)
         instanceTracker.updateReservationTimeout(instance.instanceId)
-      }
-      Future.sequence(taskTimeoutResults).map(_ => ())
+      }.runWith(Sink.ignore)
+      taskTimeoutResults.map(_ => ())
     }
 
     private[this] def overdueReservations(now: Timestamp, instances: Seq[Instance]): Seq[Instance] = {
@@ -103,6 +105,8 @@ private[jobs] object OverdueTasksActor {
 private class OverdueTasksActor(support: OverdueTasksActor.Support) extends Actor {
   var checkTicker: Cancellable = _
   private[this] val log = LoggerFactory.getLogger(getClass)
+
+  implicit val materializer = ActorMaterializer(ActorMaterializerSettings(context.system))
 
   override def preStart(): Unit = {
     import context.dispatcher

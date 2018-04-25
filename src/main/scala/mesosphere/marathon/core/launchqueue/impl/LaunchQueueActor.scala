@@ -10,6 +10,8 @@ import akka.util.Timeout
 import mesosphere.marathon.core.launchqueue.{ LaunchQueue, LaunchQueueConfig }
 import mesosphere.marathon.state.{ PathId, RunSpec }
 import LaunchQueue.QueuedInstanceInfo
+import akka.stream.{ ActorMaterializer, ActorMaterializerSettings }
+import akka.stream.scaladsl.{ Sink, Source }
 import com.typesafe.scalalogging.StrictLogging
 import mesosphere.marathon.core.instance.update.InstanceChange
 
@@ -38,6 +40,8 @@ private[impl] class LaunchQueueActor(
     offerMatchStatisticsActor: ActorRef,
     runSpecActorProps: (RunSpec, Int) => Props) extends Actor with StrictLogging {
   import LaunchQueueDelegate._
+
+  implicit val mat = ActorMaterializer(ActorMaterializerSettings(context.system))
 
   /** Currently active actors by pathId. */
   var launchers = Map.empty[PathId, ActorRef]
@@ -152,11 +156,10 @@ private[impl] class LaunchQueueActor(
   }
 
   private[this] def list(): Future[Seq[QueuedInstanceInfo]] = {
-    import context.dispatcher
-    val scatter = launchers
-      .keys
-      .map(appId => (self ? Count(appId)).mapTo[Option[QueuedInstanceInfo]])
-    Future.sequence(scatter).map(_.flatten.to[Seq])
+    Source(launchers.keySet)
+      .mapAsync(8)(appId => (self ? Count(appId)).mapTo[Option[QueuedInstanceInfo]])
+      .mapConcat(_.toList)
+      .runWith(Sink.seq)
   }
 
   private[this] def receiveHandleNormalCommands: Receive = {

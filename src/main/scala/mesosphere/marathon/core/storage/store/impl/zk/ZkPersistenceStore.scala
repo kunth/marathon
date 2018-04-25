@@ -123,21 +123,21 @@ class ZkPersistenceStore(
 
     val childrenFuture = retry(s"ZkPersistenceStore::ids($category)") {
       async {
+
         val buckets = await(client.children(s"/$category").recover {
           case _: NoNodeException => Children(category, new Stat(), Nil)
         }).children
-        val childFutures = buckets.map { bucket =>
+
+        Source(buckets).mapAsync(8) { bucket =>
           retry(s"ZkPersistenceStore::ids($category/$bucket)") {
             client.children(s"/$category/$bucket").map(_.children)
           }
         }
-        val children = await(Future.sequence(childFutures))
-        children.flatten.map { child =>
-          ZkId(category, child, None)
-        }
+          .mapConcat(identity)
+          .map(child => ZkId(category, child, None))
       }
     }
-    Source.fromFuture(childrenFuture).mapConcat(identity)
+    Source.fromFutureSource(childrenFuture).mapMaterializedValue(_ => NotUsed)
   }
 
   @SuppressWarnings(Array("all")) // async/await

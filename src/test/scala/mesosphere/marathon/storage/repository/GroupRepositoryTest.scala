@@ -84,7 +84,6 @@ class GroupRepositoryTest extends AkkaUnitTest with Mockito with ZookeeperServer
         }
 
         verify(appRepo).store(apps.head)
-        verify(appRepo).store(apps.tail.head)
         noMoreInteractions(appRepo)
       }
       "store the group if deleting apps fails" in {

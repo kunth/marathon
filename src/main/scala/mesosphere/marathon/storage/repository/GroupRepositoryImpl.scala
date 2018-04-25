@@ -7,7 +7,7 @@ import java.time.format.DateTimeFormatter
 import akka.http.scaladsl.marshalling.Marshaller
 import akka.http.scaladsl.unmarshalling.Unmarshaller
 import akka.stream.Materializer
-import akka.stream.scaladsl.Source
+import akka.stream.scaladsl.{ Sink, Source }
 import akka.{ Done, NotUsed }
 import com.typesafe.scalalogging.StrictLogging
 import mesosphere.util.summarize
@@ -16,7 +16,7 @@ import mesosphere.marathon.core.storage.repository.impl.PersistenceStoreVersione
 import mesosphere.marathon.core.storage.store.impl.BasePersistenceStore
 import mesosphere.marathon.core.storage.store.impl.cache.{ LazyCachingPersistenceStore, LazyVersionCachingPersistentStore, LoadTimeCachingPersistenceStore }
 import mesosphere.marathon.core.storage.store.{ IdResolver, PersistenceStore }
-import mesosphere.marathon.state.{ AppDefinition, Group, RootGroup, PathId, Timestamp }
+import mesosphere.marathon.state.{ AppDefinition, Group, PathId, RootGroup, Timestamp }
 import mesosphere.marathon.stream.Implicits._
 import mesosphere.marathon.util.{ RichLock, toRichFuture }
 
@@ -41,45 +41,45 @@ case class StoredGroup(
   @SuppressWarnings(Array("all")) // async/await
   def resolve(
     appRepository: AppRepository,
-    podRepository: PodRepository)(implicit ctx: ExecutionContext): Future[Group] = async { // linter:ignore UnnecessaryElseBranch
-    val appFutures = appIds.map {
+    podRepository: PodRepository)(implicit ctx: ExecutionContext, mat: Materializer): Future[Group] = async { // linter:ignore UnnecessaryElseBranch
+    val appFutures = Source(appIds).mapAsync(8) {
       case (appId, appVersion) => appRepository.getVersion(appId, appVersion).recover {
         case NonFatal(ex) =>
           logger.error(s"Failed to load $appId:$appVersion for group $id ($version)", ex)
           throw ex
       }
-    }
-    val podFutures = podIds.map {
+    }.runWith(Sink.seq)
+    val podFutures = Source(podIds).mapAsync(8) {
       case (podId, podVersion) => podRepository.getVersion(podId, podVersion).recover {
         case NonFatal(ex) =>
           logger.error(s"Failed to load $podId:$podVersion for group $id ($version)", ex)
           throw ex
       }
-    }
+    }.runWith(Sink.seq)
 
-    val groupFutures = storedGroups.map(_.resolve(appRepository, podRepository))
+    val groupFutures = Source(storedGroups).mapAsync(8)(_.resolve(appRepository, podRepository)).runWith(Sink.seq)
 
-    val allApps = await(Future.sequence(appFutures))
+    val allApps = await(appFutures)
     if (allApps.exists(_.isEmpty)) {
       logger.warn(s"Group $id $version is missing ${allApps.count(_.isEmpty)} apps")
     }
 
-    val allPods = await(Future.sequence(podFutures))
+    val allPods = await(podFutures)
     if (allPods.exists(_.isEmpty)) {
       logger.warn(s"Group $id $version is missing ${allPods.count(_.isEmpty)} pods")
     }
 
-    val apps: Map[PathId, AppDefinition] = await(Future.sequence(appFutures)).collect {
+    val apps: Map[PathId, AppDefinition] = await(appFutures).collect {
       case Some(app: AppDefinition) =>
         app.id -> app
     }(collection.breakOut)
 
-    val pods: Map[PathId, PodDefinition] = await(Future.sequence(podFutures)).collect {
+    val pods: Map[PathId, PodDefinition] = await(podFutures).collect {
       case Some(pod: PodDefinition) =>
         pod.id -> pod
     }(collection.breakOut)
 
-    val groups: Map[PathId, Group] = await(Future.sequence(groupFutures)).map { group =>
+    val groups: Map[PathId, Group] = await(groupFutures).map { group =>
       group.id -> group
     }(collection.breakOut)
 
@@ -290,14 +290,14 @@ class StoredGroupRepositoryImpl[K, C, S](
         rootFuture = promise.future
         old
       }
-      val storeAppFutures = updatedApps.map(appRepository.store)
-      val storePodFutures = updatedPods.map(podRepository.store)
-      val deleteAppFutures = deletedApps.map(appRepository.deleteCurrent)
-      val deletePodFutures = deletedPods.map(podRepository.deleteCurrent)
-      val storedApps = await(Future.sequence(storeAppFutures).asTry)
-      val storedPods = await(Future.sequence(storePodFutures).asTry)
-      await(Future.sequence(deleteAppFutures).recover { case NonFatal(e) => Done })
-      await(Future.sequence(deletePodFutures).recover { case NonFatal(e) => Done })
+      val storeAppFutures = Source(updatedApps).mapAsync(8)(appRepository.store).runWith(Sink.ignore)
+      val storePodFutures = Source(updatedPods).mapAsync(8)(podRepository.store).runWith(Sink.ignore)
+      val deleteAppFutures = Source(deletedApps).mapAsync(8)(appRepository.deleteCurrent).runWith(Sink.ignore)
+      val deletePodFutures = Source(deletedPods).mapAsync(8)(podRepository.deleteCurrent).runWith(Sink.ignore)
+      val storedApps = await(storeAppFutures.asTry)
+      val storedPods = await(storePodFutures.asTry)
+      await(deleteAppFutures.recover { case NonFatal(e) => Done })
+      await(deletePodFutures.recover { case NonFatal(e) => Done })
 
       def revertRoot(ex: Throwable): Done = {
         promise.completeWith(oldRootFuture)
@@ -344,9 +344,9 @@ class StoredGroupRepositoryImpl[K, C, S](
         case _ =>
       }
 
-      val storeAppFutures = updatedApps.map(appRepository.store)
-      val storePodFutures = updatedPods.map(podRepository.store)
-      val storedApps = await(Future.sequence(Seq(storeAppFutures, storePodFutures).flatten).asTry)
+      val storeAppFutures = Source(updatedApps).mapAsync(8)(appRepository.store).runWith(Sink.ignore)
+      val storePodFutures = Source(updatedPods).mapAsync(8)(podRepository.store).runWith(Sink.ignore)
+      val storedApps = await(Future.sequence(Seq(storeAppFutures, storePodFutures)).asTry)
 
       storedApps match {
         case Success(_) =>

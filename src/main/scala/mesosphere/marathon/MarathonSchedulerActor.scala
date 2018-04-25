@@ -4,8 +4,8 @@ import akka.Done
 import akka.actor._
 import akka.pattern.pipe
 import akka.event.{ EventStream, LoggingReceive }
-import akka.stream.Materializer
-import akka.stream.scaladsl.Sink
+import akka.stream.{ ActorMaterializer, ActorMaterializerSettings, Materializer }
+import akka.stream.scaladsl.{ Sink, Source }
 import com.typesafe.scalalogging.StrictLogging
 import mesosphere.marathon.core.deployment.{ DeploymentManager, DeploymentPlan, ScalingProposition }
 import mesosphere.marathon.core.election.{ ElectionService, LeadershipTransition }
@@ -285,7 +285,8 @@ class MarathonSchedulerActor private (
 
   def deploymentFailed(plan: DeploymentPlan, reason: Throwable): Unit = {
     logger.error(s"Deployment ${plan.id}:${plan.version} of ${plan.targetIdsString} failed", reason)
-    Future.sequence(plan.affectedRunSpecIds.map(launchQueue.asyncPurge))
+    Source(plan.affectedRunSpecIds)
+      .mapAsync(8)(launchQueue.asyncPurge).runWith(Sink.seq)
       .recover { case NonFatal(error) => logger.warn(s"Error during async purge: planId=${plan.id} for ${plan.targetIdsString}", error); Done }
       .foreach { _ => eventBus.publish(core.event.DeploymentFailed(plan.id, plan, reason = Some(reason.getMessage()))) }
   }

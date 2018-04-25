@@ -7,6 +7,7 @@ import akka.Done
 import akka.actor.{ ActorRef, ActorRefFactory, FSM, LoggingFSM, Props }
 import akka.pattern._
 import akka.stream.Materializer
+import akka.stream.scaladsl.Source
 import com.typesafe.scalalogging.StrictLogging
 import kamon.Kamon
 import kamon.metric.instrument.Time
@@ -291,30 +292,34 @@ private[storage] trait ScanBehavior[K, C, S] extends StrictLogging { this: FSM[S
       podVersionsInUse.map { case (id, pods) => id -> pods.to[Set] }(collection.breakOut)
     }
 
-    def rootsInUse(): Future[Seq[StoredGroup]] = {
-      Future.sequence {
-        storedPlans.flatMap(plan =>
-          Seq(
-            groupRepository.lazyRootVersion(plan.originalVersion),
-            groupRepository.lazyRootVersion(plan.targetVersion))
-        )
-      }
-    }.map(_.flatten)
+    def rootsInUse(): Future[Seq[StoredGroup]] =
+      Source(storedPlans)
+        .mapAsync(8) { plan =>
+          for {
+            originalRoot <- groupRepository.lazyRootVersion(plan.originalVersion)
+            targetRoot <- groupRepository.lazyRootVersion(plan.targetVersion)
+          } yield List(originalRoot, targetRoot)
+        }
+        .mapConcat(identity)
+        .runWith(Sink.seq)
+        .map(_.flatten)
 
     def appsExceedingMaxVersions(usedApps: Set[PathId]): Future[Map[PathId, Set[OffsetDateTime]]] = {
-      Future.sequence {
-        usedApps.map { id =>
+      Source(usedApps)
+        .mapAsync(8) { id =>
           appRepository.versions(id).runWith(Sink.sortedSet).map(id -> _)
         }
-      }.map(_.filter(_._2.size > maxVersions).toMap)
+        .filter(_._2.size > maxVersions)
+        .runWith(Sink.map)
     }
 
     def podsExceedingMaxVersions(usedPods: Set[PathId]): Future[Map[PathId, Set[OffsetDateTime]]] = {
-      Future.sequence {
-        usedPods.map { id =>
+      Source(usedPods)
+        .mapAsync(8) { id =>
           podRepository.versions(id).runWith(Sink.sortedSet).map(id -> _)
         }
-      }.map(_.filter(_._2.size > maxVersions).toMap)
+        .filter(_._2.size > maxVersions)
+        .runWith(Sink.map)
     }
 
     async { // linter:ignore UnnecessaryElseBranch
@@ -444,22 +449,25 @@ private[storage] trait CompactBehavior[K, C, S] extends StrictLogging { this: FS
           s"(${podVersionsToDelete.map { case (id, v) => id -> v.mkString("[", ", ", "]") }.mkString(", ")} as no roots refer to them" +
           " and they exceed max versions")
       }
-      val appFutures = appsToDelete.map(appRepository.delete)
-      val appVersionFutures = appVersionsToDelete.flatMap {
-        case (id, versions) =>
-          versions.map { version => appRepository.deleteVersion(id, version) }
-      }
-      val podFutures = podsToDelete.map(podRepository.delete)
-      val podVersionFutures = podVersionsToDelete.flatMap {
-        case (id, versions) =>
-          versions.map { version => podRepository.deleteVersion(id, version) }
-      }
-      val rootFutures = rootVersionsToDelete.map(groupRepository.deleteRootVersion)
-      await(Future.sequence(appFutures))
-      await(Future.sequence(appVersionFutures))
-      await(Future.sequence(podFutures))
-      await(Future.sequence(podVersionFutures))
-      await(Future.sequence(rootFutures))
+      val appFutures = Source(appsToDelete).mapAsync(8)(appRepository.delete).runWith(Sink.ignore)
+      val appVersionFutures = Source(appVersionsToDelete)
+        .flatMapConcat{
+          case (id, versions) =>
+            Source(versions).mapAsync(8) { version => appRepository.deleteVersion(id, version) }
+        }
+        .runWith(Sink.ignore)
+      val podFutures = Source(podsToDelete).mapAsync(8)(podRepository.delete).runWith(Sink.ignore)
+      val podVersionFutures = Source(podVersionsToDelete)
+        .flatMapConcat {
+          case (id, versions) =>
+            Source(versions).mapAsync(8) { version => podRepository.deleteVersion(id, version) }
+        }.runWith(Sink.ignore)
+      val rootFutures = Source(rootVersionsToDelete).mapAsync(8)(groupRepository.deleteRootVersion).runWith(Sink.ignore)
+      await(appFutures)
+      await(appVersionFutures)
+      await(podFutures)
+      await(podVersionFutures)
+      await(rootFutures)
       CompactDone
     }.recover {
       case NonFatal(e) =>

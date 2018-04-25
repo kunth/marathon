@@ -3,8 +3,10 @@ package api.v2
 
 import java.util.Collections
 
+import akka.actor.ActorSystem
 import mesosphere.UnitTest
 import mesosphere.marathon.api.{ RestResource, TaskKiller, TestAuthFixture }
+
 import scala.concurrent.ExecutionContext.Implicits.global
 import mesosphere.marathon.core.deployment.{ DeploymentPlan, DeploymentStep }
 import mesosphere.marathon.core.group.GroupManager
@@ -19,12 +21,20 @@ import mesosphere.marathon.state._
 import mesosphere.marathon.test.GroupCreation
 import org.mockito.Matchers
 import org.mockito.Mockito._
+import org.scalatest.BeforeAndAfterAll
 
 import scala.collection.immutable.Seq
 import scala.concurrent.Future
 import scala.concurrent.duration._
 
-class TasksResourceTest extends UnitTest with GroupCreation {
+class TasksResourceTest extends UnitTest with GroupCreation with BeforeAndAfterAll {
+
+  val system: ActorSystem = ActorSystem("TasksResourceTest")
+
+  override protected def afterAll(): Unit = {
+    system.terminate().futureValue
+  }
+
   case class Fixture(
       auth: TestAuthFixture = new TestAuthFixture,
       service: MarathonSchedulerService = mock[MarathonSchedulerService],
@@ -35,14 +45,15 @@ class TasksResourceTest extends UnitTest with GroupCreation {
       healthCheckManager: HealthCheckManager = mock[HealthCheckManager],
       implicit val identity: Identity = mock[Identity]) {
     val killService = mock[KillService]
-    val taskResource: TasksResource = new TasksResource(
+    def taskResource: TasksResource = new TasksResource(
       instanceTracker,
       taskKiller,
       config,
       groupManager,
       healthCheckManager,
       auth.auth,
-      auth.auth
+      auth.auth,
+      system
     )
   }
 
@@ -296,14 +307,15 @@ class TasksResourceTest extends UnitTest with GroupCreation {
 
       override val taskKiller = new TaskKiller(
         instanceTracker, groupManager, service, config, auth.auth, auth.auth, killService)
-      override val taskResource = new TasksResource(
+      override def taskResource = new TasksResource(
         instanceTracker,
         taskKiller,
         config,
         groupManager,
         healthCheckManager,
         auth.auth,
-        auth.auth
+        auth.auth,
+        system
       )
 
       Given("the app exists")

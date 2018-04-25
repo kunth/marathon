@@ -3,6 +3,8 @@ package core.appinfo.impl
 
 import java.time.Clock
 
+import akka.stream.Materializer
+import akka.stream.scaladsl.{ Sink, Source }
 import com.typesafe.scalalogging.StrictLogging
 import mesosphere.marathon.core.appinfo.{ AppInfo, EnrichedTask, TaskCounts, TaskStatsByVersion }
 import mesosphere.marathon.core.deployment.{ DeploymentPlan, DeploymentStepInfo }
@@ -29,7 +31,7 @@ class AppInfoBaseData(
     healthCheckManager: HealthCheckManager,
     deploymentService: DeploymentService,
     taskFailureRepository: TaskFailureRepository,
-    groupManager: GroupManager)(implicit ec: ExecutionContext) extends StrictLogging {
+    groupManager: GroupManager)(implicit ec: ExecutionContext, mat: Materializer) extends StrictLogging {
 
   logger.debug(s"new AppInfoBaseData $this")
 
@@ -164,12 +166,12 @@ class AppInfoBaseData(
   def podStatus(podDef: PodDefinition): Future[PodStatus] = async { // linter:ignore UnnecessaryElseBranch
     val now = clock.now().toOffsetDateTime
     val instances = await(instancesByRunSpecFuture).specInstances(podDef.id)
-    val specByVersion: Map[Timestamp, Option[PodDefinition]] = await(Future.sequence(
-      // TODO(jdef) if repositories ever support a bulk-load interface, use it here
-      instances.map(_.runSpecVersion).distinct.map { version =>
-        groupManager.podVersion(podDef.id, version.toOffsetDateTime).map(version -> _)
-      }
-    )).toMap
+    val specByVersion: Map[Timestamp, Option[PodDefinition]] = await(
+      Source(instances.map(_.runSpecVersion).distinct)
+        .mapAsync(8)(version => groupManager.podVersion(podDef.id, version.toOffsetDateTime).map(version -> _))
+        .runWith(Sink.seq)
+    ).toMap
+
     val instanceStatus = instances.flatMap { inst => podInstanceStatus(inst)(specByVersion.apply) }
     val statusSince = if (instanceStatus.isEmpty) now else instanceStatus.map(_.statusSince).max
     val state = await(podState(podDef.instances, instanceStatus, isPodTerminating(podDef.id)))

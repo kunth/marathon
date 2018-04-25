@@ -4,6 +4,8 @@ package core.deployment.impl
 import akka.Done
 import akka.actor._
 import akka.event.EventStream
+import akka.stream.{ ActorMaterializer, ActorMaterializerSettings }
+import akka.stream.scaladsl.{ Sink, Source }
 import com.typesafe.scalalogging.StrictLogging
 import mesosphere.marathon.core.deployment._
 import mesosphere.marathon.core.deployment.impl.DeploymentActor.{ Cancel, Fail, NextStep }
@@ -36,6 +38,8 @@ private class DeploymentActor(
     readinessCheckExecutor: ReadinessCheckExecutor) extends Actor with StrictLogging {
 
   import context.dispatcher
+
+  implicit val mat = ActorMaterializer(ActorMaterializerSettings(context.system))
 
   val steps = plan.steps.iterator
   var currentStepNr: Int = 0
@@ -107,7 +111,7 @@ private class DeploymentActor(
       val status = DeploymentStatus(plan, step)
       eventBus.publish(status)
 
-      val futures = step.actions.map { action =>
+      val futures = Source(step.actions).mapAsync(8) { action =>
         action.runSpec match {
           case app: AppDefinition => healthCheckManager.addAllFor(app, Seq.empty)
           case pod: PodDefinition => //ignore: no marathon based health check for pods
@@ -118,9 +122,9 @@ private class DeploymentActor(
           case RestartApplication(run) => restartRunnable(run, status)
           case StopApplication(run) => stopRunnable(run.withInstances(0))
         }
-      }
+      }.runWith(Sink.ignore)
 
-      Future.sequence(futures).map(_ => ()) andThen {
+      futures.map(_ => ()) andThen {
         case Success(_) =>
           logger.debug(s"Deployment step successful: step=$step plandId=${plan.id}")
           eventBus.publish(DeploymentStepSuccess(plan, step))

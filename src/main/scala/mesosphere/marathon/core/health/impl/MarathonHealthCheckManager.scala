@@ -6,7 +6,9 @@ import akka.actor.{ ActorRef, ActorRefFactory }
 import akka.event.EventStream
 import akka.pattern.ask
 import akka.stream.Materializer
+import akka.stream.scaladsl.{ Sink, Source }
 import akka.util.Timeout
+
 import scala.concurrent.ExecutionContext.Implicits.global
 import mesosphere.marathon.core.event.{ AddHealthCheck, RemoveHealthCheck }
 import mesosphere.marathon.core.group.GroupManager
@@ -175,7 +177,7 @@ class MarathonHealthCheckManager(
       // add missing health checks for the current
       // reconcile all running versions of the current app
       val appVersionsWithoutHealthChecks: Set[Timestamp] = activeAppVersions -- healthCheckAppVersions
-      val res: Set[Future[Unit]] = appVersionsWithoutHealthChecks.map { version =>
+      val res = Source(appVersionsWithoutHealthChecks).mapAsync(8) { version =>
         groupManager.appVersion(appId, version.toOffsetDateTime).map {
           case None =>
             // FIXME: If the app version of the task is not available anymore, no health check is started.
@@ -189,14 +191,14 @@ class MarathonHealthCheckManager(
             log.info(s"addAllFor [$appId] version [$version]")
             addAllFor(appVersion, instancesByVersion.getOrElse(version, Seq.empty))
         }
-      }
-      Future.sequence(res).map(_ => Done)
+      }.runWith(Sink.ignore)
+      res
     }
 
     async {
       val instances = await(instanceTracker.instancesBySpec())
-      val reconciledApps = apps.map(app => reconcileApp(app, instances.specInstances(app.id)))
-      await(Future.sequence(reconciledApps).map(_ => Done))
+      val reconciledApps = Source(apps).mapAsync(8)(app => reconcileApp(app, instances.specInstances(app.id))).runWith(Sink.ignore)
+      await(reconciledApps)
     }
   }
 
@@ -239,27 +241,29 @@ class MarathonHealthCheckManager(
     futureAppVersion.flatMap {
       case None => Future.successful(Nil)
       case Some(appVersion) =>
-        Future.sequence(
-          listActive(appId, appVersion).collect {
-            case ActiveHealthCheck(_, actor) =>
-              (actor ? GetInstanceHealth(instanceId)).mapTo[Health]
-          }(collection.breakOut)
-        )
+        Source(listActive(appId, appVersion))
+          .collect {
+            case ActiveHealthCheck(_, actor) => actor
+          }
+          .mapAsync(8) {
+            actorRef => (actorRef ? GetInstanceHealth(instanceId)).mapTo[Health]
+          }
+          .runWith(Sink.seq)
     }
   }
 
   override def statuses(appId: PathId): Future[Map[Instance.Id, Seq[Health]]] = {
     appHealthChecks.readLock { ahcs =>
       implicit val timeout: Timeout = Timeout(2, SECONDS)
-      val futureHealths: Seq[Future[HealthCheckActor.AppHealth]] = ahcs(appId).values.flatMap { checks =>
-        checks.map {
-          case ActiveHealthCheck(_, actor) => (actor ? GetAppHealth).mapTo[AppHealth]
+      Source(ahcs(appId).values.toList)
+        .mapConcat(identity)
+        .collect { case ActiveHealthCheck(_, actor) => actor }
+        .mapAsync(8) { actor =>
+          (actor ? GetAppHealth).mapTo[AppHealth]
         }
-      }(collection.breakOut)
-
-      Future.sequence(futureHealths).map { healths =>
-        healths.flatMap(_.health).groupBy(_.instanceId).withDefaultValue(Nil)
-      }
+        .mapConcat(_.health)
+        .runWith(Sink.seq)
+        .map(_.groupBy(_.instanceId))
     }
   }
 
