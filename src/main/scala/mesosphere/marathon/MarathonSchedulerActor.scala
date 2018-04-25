@@ -292,7 +292,7 @@ class MarathonSchedulerActor private (
   def deploymentFailed(plan: DeploymentPlan, reason: Throwable): Unit = {
     logger.error(s"Deployment ${plan.id}:${plan.version} of ${plan.targetIdsString} failed", reason)
     Source(plan.affectedRunSpecIds)
-      .mapAsync(8)(launchQueue.asyncPurge).runWith(Sink.seq)
+      .mapAsync(8)(launchQueue.purge).runWith(Sink.seq)
       .recover { case NonFatal(error) => logger.warn(s"Error during async purge: planId=${plan.id} for ${plan.targetIdsString}", error); Done }
       .foreach { _ => eventBus.publish(core.event.DeploymentFailed(plan.id, plan, reason = Some(reason.getMessage()))) }
   }
@@ -452,7 +452,7 @@ class SchedulerActions(
     instancesToKill.foreach { instances: Seq[Instance] =>
       logger.info(s"Scaling ${runSpec.id} from ${runningInstances.size} down to $targetCount instances")
 
-      launchQueue.asyncPurge(runSpec.id)
+      launchQueue.purge(runSpec.id)
         .recover {
           case NonFatal(e) =>
             logger.warn("Async purge failed: {}", e)
@@ -464,14 +464,16 @@ class SchedulerActions(
 
     }
 
-    instancesToStart.foreach { toStart: Int =>
+    if (instancesToStart.isDefined) {
+      val toStart = instancesToStart.get
+
       logger.info(s"Need to scale ${runSpec.id} from ${runningInstances.size} up to $targetCount instances")
-      val leftToLaunch = launchQueue.get(runSpec.id).fold(0)(_.instancesLeftToLaunch)
+      val leftToLaunch = await(launchQueue.get(runSpec.id)).fold(0)(_.instancesLeftToLaunch)
       val toAdd = toStart - leftToLaunch
 
       if (toAdd > 0) {
         logger.info(s"Queueing $toAdd new instances for ${runSpec.id} to the already $leftToLaunch queued ones")
-        launchQueue.add(runSpec, toAdd)
+        await(launchQueue.add(runSpec, toAdd))
       } else {
         logger.info(s"Already queued or started ${runningInstances.size} instances for ${runSpec.id}. Not scaling.")
       }
