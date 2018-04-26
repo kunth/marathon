@@ -2,7 +2,6 @@ package mesosphere.marathon
 package core.task.tracker.impl
 
 import akka.stream.Materializer
-import akka.stream.scaladsl.Source
 import mesosphere.marathon.core.task.tracker.InstanceTracker
 import mesosphere.marathon.storage.repository.InstanceRepository
 import mesosphere.marathon.stream.Sink
@@ -22,13 +21,20 @@ private[tracker] class InstancesLoaderImpl(repo: InstanceRepository)(implicit va
   private val ConcurrentCallLimit = 8
 
   override def load(): Future[InstanceTracker.InstancesBySpec] = {
-    for {
-      names <- repo.ids().runWith(Sink.seq)
-      _ = log.info(s"About to load ${names.size} tasks")
-      instances <- Source(names).mapAsync(ConcurrentCallLimit)(repo.get).mapConcat(_.toList).runWith(Sink.seq)
-    } yield {
-      log.info(s"Loaded ${instances.size} tasks")
-      InstanceTracker.InstancesBySpec.forInstances(instances)
-    }
+
+    repo.ids()
+      .grouped(Int.MaxValue) //TODO: might explode, we need a limit
+      .mapConcat { names =>
+        log.info(s"About to load ${names.size} tasks")
+        names
+      }
+      .mapAsync(ConcurrentCallLimit)(repo.get)
+      .mapConcat(_.toList)
+      .runWith(Sink.seq)
+      .map { instances =>
+        log.info(s"Loaded ${instances.size} tasks")
+        InstanceTracker.InstancesBySpec.forInstances(instances)
+      }
+
   }
 }

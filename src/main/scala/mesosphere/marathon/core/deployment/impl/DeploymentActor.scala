@@ -105,28 +105,30 @@ private class DeploymentActor(
   }
 
   // scalastyle:off
-  def performStep(step: DeploymentStep): Future[Unit] = {
+  def performStep(step: DeploymentStep): Future[Done] = {
     logger.debug(s"Perform deployment step: step=$step planId=${plan.id}")
     if (step.actions.isEmpty) {
-      Future.successful(())
+      Future.successful(Done)
     } else {
       val status = DeploymentStatus(plan, step)
       eventBus.publish(status)
 
-      val futures = Source(step.actions).mapAsync(ConcurrentCallLimit) { action =>
-        action.runSpec match {
-          case app: AppDefinition => healthCheckManager.addAllFor(app, Seq.empty)
-          case pod: PodDefinition => //ignore: no marathon based health check for pods
+      val futures = Source(step.actions)
+        .mapAsync(ConcurrentCallLimit) { action =>
+          action.runSpec match {
+            case app: AppDefinition => healthCheckManager.addAllFor(app, Seq.empty)
+            case pod: PodDefinition => //ignore: no marathon based health check for pods
+          }
+          action match {
+            case StartApplication(run, scaleTo) => startRunnable(run, scaleTo, status)
+            case ScaleApplication(run, scaleTo, toKill) => scaleRunnable(run, scaleTo, toKill, status)
+            case RestartApplication(run) => restartRunnable(run, status)
+            case StopApplication(run) => stopRunnable(run.withInstances(0))
+          }
         }
-        action match {
-          case StartApplication(run, scaleTo) => startRunnable(run, scaleTo, status)
-          case ScaleApplication(run, scaleTo, toKill) => scaleRunnable(run, scaleTo, toKill, status)
-          case RestartApplication(run) => restartRunnable(run, status)
-          case StopApplication(run) => stopRunnable(run.withInstances(0))
-        }
-      }.runWith(Sink.ignore)
+        .runWith(Sink.ignore)
 
-      futures.map(_ => ()) andThen {
+      futures andThen {
         case Success(_) =>
           logger.debug(s"Deployment step successful: step=$step plandId=${plan.id}")
           eventBus.publish(DeploymentStepSuccess(plan, step))

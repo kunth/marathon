@@ -165,7 +165,6 @@ class TasksResource @Inject() (
           .runWith(Sink.seq)
           .map(_
             .groupBy(instance => instance.instanceId.runSpecId)
-            .map { case (appId, instances) => appId -> instances }
           )
       )
       val response =

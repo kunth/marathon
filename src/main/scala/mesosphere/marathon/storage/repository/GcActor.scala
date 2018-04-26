@@ -320,7 +320,7 @@ private[storage] trait ScanBehavior[K, C, S] extends StrictLogging { this: FSM[S
         .mapAsync(ConcurrentCallLimit) { id =>
           podRepository.versions(id).runWith(Sink.sortedSet).map(id -> _)
         }
-        .filter(_._2.size > maxVersions)
+        .filter { case (_, versions) => versions.size > maxVersions }
         .runWith(Sink.map)
     }
 
@@ -453,12 +453,12 @@ private[storage] trait CompactBehavior[K, C, S] extends StrictLogging { this: FS
           s"(${podVersionsToDelete.map { case (id, v) => id -> v.mkString("[", ", ", "]") }.mkString(", ")} as no roots refer to them" +
           " and they exceed max versions")
       }
-      val appFutures = Source(appsToDelete).mapAsync(ConcurrentCallLimit)(appRepository.delete).runWith(Sink.ignore)
+      val appFutures = Source(appsToDelete)
+        .mapAsync(ConcurrentCallLimit)(appRepository.delete)
+        .runWith(Sink.ignore)
       val appVersionFutures = Source(appVersionsToDelete)
-        .flatMapConcat{
-          case (id, versions) =>
-            Source(versions).mapAsync(ConcurrentCallLimit) { version => appRepository.deleteVersion(id, version) }
-        }
+        .mapConcat { case (id, versions) => versions.map(v => id -> v) }
+        .mapAsync(ConcurrentCallLimit) { case (id, version) => appRepository.deleteVersion(id, version) }
         .runWith(Sink.ignore)
       val podFutures = Source(podsToDelete).mapAsync(ConcurrentCallLimit)(podRepository.delete).runWith(Sink.ignore)
       val podVersionFutures = Source(podVersionsToDelete)

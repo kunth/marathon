@@ -292,7 +292,8 @@ class MarathonSchedulerActor private (
   def deploymentFailed(plan: DeploymentPlan, reason: Throwable): Unit = {
     logger.error(s"Deployment ${plan.id}:${plan.version} of ${plan.targetIdsString} failed", reason)
     Source(plan.affectedRunSpecIds)
-      .mapAsync(ConcurrentCallLimit)(launchQueue.purge).runWith(Sink.seq)
+      .mapAsync(ConcurrentCallLimit)(launchQueue.purge)
+      .runWith(Sink.seq)
       .recover { case NonFatal(error) => logger.warn(s"Error during async purge: planId=${plan.id} for ${plan.targetIdsString}", error); Done }
       .foreach { _ => eventBus.publish(core.event.DeploymentFailed(plan.id, plan, reason = Some(reason.getMessage()))) }
   }

@@ -121,23 +121,23 @@ class ZkPersistenceStore(
   override protected def rawIds(category: String): Source[ZkId, NotUsed] = {
     require(isOpen, "the store must be opened before it can be used")
 
-    val childrenFuture = retry(s"ZkPersistenceStore::ids($category)") {
-      async {
-
-        val buckets = await(client.children(s"/$category").recover {
+    val buckets = retry(s"ZkPersistenceStore::ids($category)") {
+      client
+        .children(s"/$category")
+        .recover {
           case _: NoNodeException => Children(category, new Stat(), Nil)
-        }).children
-
-        Source(buckets).mapAsync(maxConcurrent) { bucket =>
-          retry(s"ZkPersistenceStore::ids($category/$bucket)") {
-            client.children(s"/$category/$bucket").map(_.children)
-          }
         }
-          .mapConcat(identity)
-          .map(child => ZkId(category, child, None))
-      }
     }
-    Source.fromFutureSource(childrenFuture).mapMaterializedValue(_ => NotUsed)
+
+    Source.fromFuture(buckets)
+      .mapConcat(_.children)
+      .mapAsync(maxConcurrent) { bucket =>
+        retry(s"ZkPersistenceStore::ids($category/$bucket)") {
+          client.children(s"/$category/$bucket").map(_.children)
+        }
+      }
+      .mapConcat(identity)
+      .map(child => ZkId(category, child, None))
   }
 
   @SuppressWarnings(Array("all")) // async/await

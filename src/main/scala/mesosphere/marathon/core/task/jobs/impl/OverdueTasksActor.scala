@@ -3,6 +3,7 @@ package core.task.jobs.impl
 
 import java.time.Clock
 
+import akka.Done
 import akka.actor._
 import akka.stream.{ ActorMaterializer, ActorMaterializerSettings, Materializer }
 import akka.stream.scaladsl.{ Sink, Source }
@@ -40,7 +41,7 @@ private[jobs] object OverdueTasksActor {
 
     private val ConcurrentCallLimit = 8
 
-    def check()(implicit mat: Materializer): Future[Unit] = {
+    def check()(implicit mat: Materializer): Future[Done] = {
       val now = clock.now()
       logger.debug("Checking for overdue tasks")
       instanceTracker.instancesBySpec().flatMap { tasksByApp =>
@@ -86,12 +87,13 @@ private[jobs] object OverdueTasksActor {
       instances.filter(instance => instance.tasksMap.valuesIterator.exists(launchedAndExpired))
     }
 
-    private[this] def timeoutOverdueReservations(now: Timestamp, instances: Seq[Instance])(implicit mat: Materializer): Future[Unit] = {
-      val taskTimeoutResults = Source(overdueReservations(now, instances)).mapAsync(ConcurrentCallLimit) { instance =>
-        logger.warn("Scheduling ReservationTimeout for {}", instance.instanceId)
-        instanceTracker.updateReservationTimeout(instance.instanceId)
-      }.runWith(Sink.ignore)
-      taskTimeoutResults.map(_ => ())
+    private[this] def timeoutOverdueReservations(now: Timestamp, instances: Seq[Instance])(implicit mat: Materializer): Future[Done] = {
+      Source(overdueReservations(now, instances))
+        .mapAsync(ConcurrentCallLimit) { instance =>
+          logger.warn("Scheduling ReservationTimeout for {}", instance.instanceId)
+          instanceTracker.updateReservationTimeout(instance.instanceId)
+        }
+        .runWith(Sink.ignore)
     }
 
     private[this] def overdueReservations(now: Timestamp, instances: Seq[Instance]): Seq[Instance] = {
@@ -129,7 +131,7 @@ private class OverdueTasksActor(support: OverdueTasksActor.Support) extends Acto
         case Some(ack) =>
           import akka.pattern.pipe
           import context.dispatcher
-          resultFuture.pipeTo(ack)
+          resultFuture.map(_ => ()).pipeTo(ack)
 
         case None =>
           import context.dispatcher
