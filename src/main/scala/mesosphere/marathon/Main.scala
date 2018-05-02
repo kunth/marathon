@@ -6,11 +6,12 @@ import com.google.common.util.concurrent.ServiceManager
 import com.google.inject.{ Guice, Module }
 import com.typesafe.config.{ Config, ConfigFactory }
 import com.typesafe.scalalogging.StrictLogging
-import mesosphere.marathon.api.LeaderProxyFilterModule
+import mesosphere.marathon.api.{ LeaderProxyFilterModule, SystemResource }
+import org.eclipse.jetty.servlets.EventSourceServlet
 import scala.concurrent.ExecutionContext.Implicits.global
 import kamon.Kamon
 import mesosphere.marathon.api.HttpModule
-import mesosphere.marathon.api.{ MarathonHttpService, MarathonRestModule }
+import mesosphere.marathon.api.MarathonRestModule
 import mesosphere.marathon.core.CoreGuiceModule
 import mesosphere.marathon.core.base.toRichRuntime
 import mesosphere.marathon.metrics.Metrics
@@ -118,7 +119,7 @@ class MarathonApp(args: Seq[String]) extends AutoCloseable with StrictLogging {
     requestLogHandler = httpModule.requestLogHandler
   )
 
-  val marathonRestModule = new MarathonRestModule(httpService = httpModule.httpService)
+  val marathonRestModule = new MarathonRestModule()
   val leaderProxyFilterModule = new LeaderProxyFilterModule()
 
   protected def modules: Seq[Module] =
@@ -147,15 +148,20 @@ class MarathonApp(args: Seq[String]) extends AutoCloseable with StrictLogging {
     val injector = Guice.createInjector(modules.asJava)
     Metrics.start(injector.getInstance(classOf[ActorSystem]), cliConf)
     val services = Seq(
-      injector.getInstance(classOf[MarathonHttpService]),
+      httpModule.marathonHttpService,
       injector.getInstance(classOf[MarathonSchedulerService]))
 
-    val httpBindings = new api.HttpBindings(
-      injector,
+    api.HttpBindings.apply(
       httpModule.handler,
-      httpModule.handlerCollection)
-
-    httpBindings.apply()
+      systemResource = injector.getInstance(classOf[SystemResource]),
+      rootApplication = injector.getInstance(classOf[api.RootApplication]),
+      leaderProxyFilter = injector.getInstance(classOf[api.LeaderProxyFilter]),
+      limitConcurrentRequestsFilter = injector.getInstance(classOf[api.LimitConcurrentRequestsFilter]),
+      corsFilter = injector.getInstance(classOf[api.CORSFilter]),
+      cacheDisablingFilter = injector.getInstance(classOf[api.CacheDisablingFilter]),
+      eventSourceServlet = injector.getInstance(classOf[EventSourceServlet]),
+      webJarServlet = injector.getInstance(classOf[api.WebJarServlet]),
+      publicServlet = injector.getInstance(classOf[api.PublicServlet]))
 
     serviceManager = Some(new ServiceManager(services.asJava))
 
