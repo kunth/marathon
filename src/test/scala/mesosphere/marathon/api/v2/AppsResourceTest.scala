@@ -1,7 +1,9 @@
 package mesosphere.marathon
 package api.v2
 
+import java.lang.{ Exception => JavaException }
 import java.util
+import javax.ws.rs.container.AsyncResponse
 import javax.ws.rs.core.Response
 
 import akka.Done
@@ -23,17 +25,77 @@ import mesosphere.marathon.state._
 import mesosphere.marathon.storage.repository.GroupRepository
 import mesosphere.marathon.test.GroupCreation
 import org.mockito.Matchers
+import org.scalatest.exceptions.TestFailedException
 import play.api.libs.json._
 import mesosphere.marathon.api.v2.validation.AppValidation
 
 import scala.collection.immutable
 import scala.collection.immutable.Seq
-import scala.concurrent.Future
+import scala.concurrent.{ Future, Promise }
 import scala.concurrent.duration._
 import scala.language.postfixOps
-import scala.util.Try
+import scala.util.{ Try, Success, Failure }
 
 class AppsResourceTest extends AkkaUnitTest with GroupCreation {
+
+  def mapException(e: JavaException): Response = {
+    val exceptionMapper = new MarathonExceptionMapper()
+    exceptionMapper.toResponse(e)
+  }
+
+  def syncRequest(fn: => Response): Response = {
+    try fn
+    catch {
+      case e: JavaException => mapException(e)
+    }
+  }
+
+  def asyncRequest(fn: AsyncResponse => Unit): Response = {
+    val ar = new TestAsyncResponse()
+    Try(fn(ar)).
+      flatMap { _ =>
+        ar.response.transform({ t => Success(t) }).futureValue
+      } match {
+        case Success(r) => r
+        case Failure(e: JavaException) => mapException(e)
+        case Failure(e) => throw new TestFailedException(e, 1)
+      }
+  }
+
+  class TestAsyncResponse() extends AsyncResponse {
+    import java.util.{ Map, Collection, Date }
+    import javax.ws.rs.container.TimeoutHandler
+
+    private val _result = Promise[Object]
+
+    def response: Future[Response] = _result.future.transform {
+      case Success(r: Response) => Success(r)
+      case Success(o) => Failure(new RuntimeException("did not complete with a response"))
+      case Failure(ex) => Failure(ex)
+    }
+
+    override def resume(response: Object): Boolean = {
+      _result.success(response)
+      true
+    }
+    override def resume(response: Throwable): Boolean = {
+      _result.failure(response)
+      true
+    }
+
+    override def cancel(): Boolean = ???
+    override def cancel(retryAfter: Int): Boolean = ???
+    override def cancel(retryAfter: Date): Boolean = ???
+    override def isSuspended(): Boolean = ???
+    override def isCancelled(): Boolean = ???
+    override def isDone(): Boolean = _result.isCompleted
+    override def setTimeout(time: Long, unit: TimeUnit): Boolean = ???
+    override def setTimeoutHandler(handler: TimeoutHandler): Unit = ???
+    override def register(callback: Class[_]): Collection[Class[_]] = ???
+    override def register(callback: Class[_], callbacks: Class[_]*): Map[Class[_], Collection[Class[_]]] = ???
+    override def register(callback: Object): Collection[Class[_]] = ???
+    override def register(callback: Any, callbacks: Object*): java.util.Map[Class[_], Collection[Class[_]]] = ???
+  }
 
   case class Fixture(
       clock: SettableClock = new SettableClock(),
@@ -53,7 +115,7 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
       config,
       groupManager,
       PluginManager.None
-    )(auth.auth, auth.auth)
+    )(auth.auth, auth.auth, ctx)
 
     implicit val authenticator: Authenticator = auth.auth
     implicit val authorizer: Authorizer = auth.auth
@@ -115,7 +177,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       When("The request is processed")
 
-      appsResource.create(body.getBytes("UTF-8"), force = false, auth.request)
+      asyncRequest { r =>
+        appsResource.create(body.getBytes("UTF-8"), force = false, auth.request, r)
+      }
     }
   }
 
@@ -131,6 +195,7 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
     val groupManager: GroupManager = groupManagerFixture.groupManager
     val groupRepository: GroupRepository = groupManagerFixture.groupRepository
 
+    val asyncResponse = new TestAsyncResponse()
     val config: AllConf = AllConf.withTestConfig(configArgs: _*)
     val appsResource: AppsResource = new AppsResource(
       clock,
@@ -141,7 +206,7 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
       config,
       groupManager,
       PluginManager.None
-    )(auth.auth, auth.auth)
+    )(auth.auth, auth.auth, ctx)
   }
 
   "Apps Resource" should {
@@ -153,7 +218,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
       When("The create request is made")
       clock += 5.seconds
       val result = Try {
-        val response = appsResource.create(body, force = false, auth.request)
+        val response = asyncRequest { r =>
+          appsResource.create(body, force = false, auth.request, r)
+        }
 
         Then("It is successful")
         response.getStatus should be(201)
@@ -193,7 +260,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       When("The create request is made")
       clock += 5.seconds
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
       Try(prepareApp(app, groupManager))
 
       Then("It is successful")
@@ -214,7 +283,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       When("The create request is made")
       clock += 5.seconds
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
       Try(prepareApp(app, groupManager))
 
       Then("It fails")
@@ -235,7 +306,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       When("The create request is made")
       clock += 5.seconds
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
       Try(prepareApp(app, groupManager))
 
       Then("It fails")
@@ -255,7 +328,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       When("The create request is made")
       clock += 5.seconds
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
       Try(prepareApp(app, groupManager))
 
       Then("It is successful")
@@ -296,7 +371,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
       )
 
       When("The create request is made")
-      val response = appsResource.create(Json.stringify(Json.toJson(app)).getBytes("UTF-8"), force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(Json.stringify(Json.toJson(app)).getBytes("UTF-8"), force = false, auth.request, r)
+      }
 
       Then("Validation fails")
       response.getStatus should be(422)
@@ -325,7 +402,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       When("The create request is made")
       clock += 5.seconds
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
 
       Then("It is successful")
       assert(response.getStatus == 201, s"body = ${new String(body)}, response = ${response.getEntity.asInstanceOf[String]}")
@@ -355,7 +434,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       When("The create request is made")
       clock += 5.seconds
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
 
       Then("It is successful")
       response.getStatus should be(201)
@@ -425,7 +506,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       When("The create request is made")
       clock += 5.seconds
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
 
       Then("It is successful")
       assert(response.getStatus == 201, s"body=${new String(body)}, response=${response.getEntity.asInstanceOf[String]}")
@@ -453,7 +536,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       When("The create request is made")
       clock += 5.seconds
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
 
       Then("It is successful")
       response.getStatus should be(201)
@@ -485,7 +570,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       When("The create request is made")
       clock += 5.seconds
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
 
       Then("It is successful")
       response.getStatus should be(201)
@@ -523,7 +610,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       When("The create request is made")
       clock += 5.seconds
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
 
       Then("It is successful")
       response.getStatus should be(201)
@@ -567,7 +656,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       When("The create request is made")
       clock += 5.seconds
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
 
       Then("It is successful")
       response.getStatus should be(201)
@@ -622,7 +713,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       When("The create request is made")
       clock += 5.seconds
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
 
       Then("It is not successful")
       response.getStatus should be(422)
@@ -663,7 +756,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       When("The create request is made")
       clock += 5.seconds
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
 
       Then("It is successful")
       response.getStatus should be(201)
@@ -690,7 +785,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       When("The create request is made")
       clock += 5.seconds
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
 
       Then("It fails")
       response.getStatus should be(422)
@@ -709,7 +806,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       When("The create request is made")
       clock += 5.seconds
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
 
       Then("It is successful")
       response.getStatus should be(201)
@@ -739,7 +838,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       When("The create request is made")
       clock += 5.seconds
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
 
       Then("It fails")
       response.getStatus should be(422)
@@ -762,7 +863,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       When("The create request is made")
       clock += 5.seconds
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
 
       Then("It fails")
       response.getStatus should be(422)
@@ -778,7 +881,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
         val (body, plan) = prepareApp(app, groupManager, validate = false)
 
         Then("A constraint violation exception is thrown")
-        val response = appsResource.create(body, force = false, auth.request)
+        val response = asyncRequest { r =>
+          appsResource.create(body, force = false, auth.request, r)
+        }
         response.getStatus should be(422)
       }
 
@@ -787,7 +892,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
           cpus = -1)
         val (body, _) = prepareApp(app, groupManager, validate = false)
 
-        val response = appsResource.create(body, force = false, auth.request)
+        val response = asyncRequest { r =>
+          appsResource.create(body, force = false, auth.request, r)
+        }
         response.getStatus should be(422)
       }
 
@@ -796,7 +903,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
           instances = -1)
         val (body, _) = prepareApp(app, groupManager, validate = false)
 
-        val response = appsResource.create(body, force = false, auth.request)
+        val response = asyncRequest { r =>
+          appsResource.create(body, force = false, auth.request, r)
+        }
         response.getStatus should be(422)
       }
 
@@ -816,7 +925,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       When("The create request is made")
       clock += 5.seconds
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
 
       Then("It is successful")
       assert(response.getStatus == 201, s"body=${new String(body)}, response=${response.getEntity.asInstanceOf[String]}")
@@ -838,7 +949,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
       val (body, _) = prepareApp(app, groupManager, validate = false)
 
       Then("A constraint violation exception is thrown")
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
       response.getStatus should be(422)
     }
 
@@ -852,7 +965,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       Then("A constraint violation exception is thrown")
       val body = invalidAppJson.getBytes("UTF-8")
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
       response.getStatus should be(422)
     }
 
@@ -1400,37 +1515,51 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
       groupManager.rootGroup() returns createRootGroup()
 
       When("we try to fetch the list of apps")
-      val index = appsResource.index("", "", "", embed, req)
+      val index = syncRequest {
+        appsResource.index("", "", "", embed, req)
+      }
       Then("we receive a NotAuthenticated response")
       index.getStatus should be(auth.NotAuthenticatedStatus)
 
       When("we try to add an app")
-      val create = appsResource.create(app.getBytes("UTF-8"), force = false, req)
+      val create = asyncRequest { r =>
+        appsResource.create(app.getBytes("UTF-8"), force = false, req, r)
+      }
       Then("we receive a NotAuthenticated response")
       create.getStatus should be(auth.NotAuthenticatedStatus)
 
       When("we try to fetch an app")
-      val show = appsResource.show("", embed, req)
+      val show = syncRequest {
+        appsResource.show("", embed, req)
+      }
       Then("we receive a NotAuthenticated response")
       show.getStatus should be(auth.NotAuthenticatedStatus)
 
       When("we try to update an app")
-      val replace = appsResource.replace("", app.getBytes("UTF-8"), force = false, partialUpdate = true, req)
+      val replace = syncRequest {
+        appsResource.replace("", app.getBytes("UTF-8"), force = false, partialUpdate = true, req)
+      }
       Then("we receive a NotAuthenticated response")
       replace.getStatus should be(auth.NotAuthenticatedStatus)
 
       When("we try to update multiple apps")
-      val replaceMultiple = appsResource.replaceMultiple(force = false, partialUpdate = true, s"[$app]".getBytes("UTF-8"), req)
+      val replaceMultiple = syncRequest {
+        appsResource.replaceMultiple(force = false, partialUpdate = true, s"[$app]".getBytes("UTF-8"), req)
+      }
       Then("we receive a NotAuthenticated response")
       replaceMultiple.getStatus should be(auth.NotAuthenticatedStatus)
 
       When("we try to delete an app")
-      val delete = appsResource.delete(force = false, "", req)
+      val delete = syncRequest {
+        appsResource.delete(force = false, "", req)
+      }
       Then("we receive a NotAuthenticated response")
       delete.getStatus should be(auth.NotAuthenticatedStatus)
 
       When("we try to restart an app")
-      val restart = appsResource.restart("", force = false, req)
+      val restart = syncRequest {
+        appsResource.restart("", force = false, req)
+      }
       Then("we receive a NotAuthenticated response")
       restart.getStatus should be(auth.NotAuthenticatedStatus)
     }
@@ -1444,32 +1573,44 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
       val app = """{"id":"/a","cmd":"foo","ports":[]}"""
 
       When("we try to create an app")
-      val create = appsResource.create(app.getBytes("UTF-8"), force = false, req)
+      val create = asyncRequest { r =>
+        appsResource.create(app.getBytes("UTF-8"), force = false, req, r)
+      }
       Then("we receive a NotAuthorized response")
       create.getStatus should be(auth.UnauthorizedStatus)
 
       When("we try to fetch an app")
-      val show = appsResource.show("*", embed, req)
+      val show = syncRequest {
+        appsResource.show("*", embed, req)
+      }
       Then("we receive a NotAuthorized response")
       show.getStatus should be(auth.UnauthorizedStatus)
 
       When("we try to update an app")
-      val replace = appsResource.replace("/a", app.getBytes("UTF-8"), force = false, partialUpdate = true, req)
+      val replace = syncRequest {
+        appsResource.replace("/a", app.getBytes("UTF-8"), force = false, partialUpdate = true, req)
+      }
       Then("we receive a NotAuthorized response")
       replace.getStatus should be(auth.UnauthorizedStatus)
 
       When("we try to update multiple apps")
-      val replaceMultiple = appsResource.replaceMultiple(force = false, partialUpdate = true, s"[$app]".getBytes("UTF-8"), req)
+      val replaceMultiple = syncRequest {
+        appsResource.replaceMultiple(force = false, partialUpdate = true, s"[$app]".getBytes("UTF-8"), req)
+      }
       Then("we receive a NotAuthorized response")
       replaceMultiple.getStatus should be(auth.UnauthorizedStatus)
 
       When("we try to remove an app")
-      val delete = appsResource.delete(force = false, "/a", req)
+      val delete = syncRequest {
+        appsResource.delete(force = false, "/a", req)
+      }
       Then("we receive a NotAuthorized response")
       delete.getStatus should be(auth.UnauthorizedStatus)
 
       When("we try to restart an app")
-      val restart = appsResource.restart("/a", force = false, req)
+      val restart = syncRequest {
+        appsResource.restart("/a", force = false, req)
+      }
       Then("we receive a NotAuthorized response")
       restart.getStatus should be(auth.UnauthorizedStatus)
     }
@@ -1564,7 +1705,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
       """.stripMargin
 
       When("The request is processed")
-      val response = appsResource.create(body.getBytes("UTF-8"), false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body.getBytes("UTF-8"), false, auth.request, r)
+      }
 
       Then("The response has no error and it is valid")
       response.getStatus should be(201)
@@ -1589,7 +1732,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
 
       When("The create request is made")
       clock += 5.seconds
-      val response = appsResource.create(body, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.create(body, force = false, auth.request, r)
+      }
 
       Then("It is successful")
       assert(response.getStatus == 201, s"body=${new String(body)}, response=${response.getEntity.asInstanceOf[String]}")
