@@ -355,7 +355,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
       When("The application is updated")
       val updateRequest = App(id = id, instances = 2)
       val updatedBody = Json.stringify(Json.toJson(updateRequest)).getBytes("UTF-8")
-      val response = appsResource.patch(app.id, updatedBody, force = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.patch(app.id, updatedBody, force = false, auth.request, r)
+      }
 
       Then("It is successful")
       response.getStatus should be(200)
@@ -466,7 +468,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
       val updatedApp = app.copy(networks = Seq(Network(mode = NetworkMode.Container, name = Some("bar"))))
       val updatedJson = Json.toJson(updatedApp).as[JsObject]
       val updatedBody = Json.stringify(updatedJson).getBytes("UTF-8")
-      val response = appsResource.replace(updatedApp.id, updatedBody, force = false, partialUpdate = true, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.replace(updatedApp.id, updatedBody, force = false, partialUpdate = true, auth.request, r)
+      }
 
       Then("It is successful")
       assert(response.getStatus == 200, s"response=${response.getEntity.toString}")
@@ -488,7 +492,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
       When("The application is updated")
       val updatedJson = Json.toJson(updatedApp).as[JsObject]
       val updatedBody = Json.stringify(updatedJson).getBytes("UTF-8")
-      val response = appsResource.replace(updatedApp.id, updatedBody, force = false, partialUpdate = false, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.replace(updatedApp.id, updatedBody, force = false, partialUpdate = false, auth.request, r)
+      }
 
       Then("the update should fail")
       response.getStatus should be(422)
@@ -981,7 +987,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
       groupManager.app(PathId("/app")) returns Some(app)
 
       When("The application is updated")
-      val response = appsResource.replace(app.id.toString, body, force = false, partialUpdate = true, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.replace(app.id.toString, body, force = false, partialUpdate = true, auth.request, r)
+      }
 
       Then("The application is updated")
       response.getStatus should be(200)
@@ -999,7 +1007,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
       val body = Json.stringify(appJsonWithOnlyPorts).getBytes("UTF-8")
 
       When("The application is updated")
-      val response = appsResource.replace(app.id, body, force = false, partialUpdate = true, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.replace(app.id, body, force = false, partialUpdate = true, auth.request, r)
+      }
 
       Then("The application is updated")
       response.getStatus should be(200)
@@ -1021,7 +1031,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
           stripMargin.getBytes("UTF-8")
 
       Then("A validation exception is thrown")
-      val response = appsResource.replace(app.id, body, force = false, partialUpdate = true, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.replace(app.id, body, force = false, partialUpdate = true, auth.request, r)
+      }
       response.getStatus should be(422)
       response.getEntity.toString should include("/container/docker")
       response.getEntity.toString should include("not defined")
@@ -1376,7 +1388,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
           |}""".stripMargin.getBytes("UTF-8")
 
       When("The application is updated")
-      val response = appsResource.replace(app.id, body, force = false, partialUpdate = true, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.replace(app.id, body, force = false, partialUpdate = true, auth.request, r)
+      }
 
       Then("The return code indicates success")
       response.getStatus should be(200)
@@ -1424,7 +1438,9 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
       groupManager.app(PathId("/app")) returns Some(app)
 
       groupManager.updateApp(any, any, any, any, any) returns Future.successful(plan)
-      val response = appsResource.restart(app.id.toString, force = true, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.restart(app.id.toString, force = true, auth.request, r)
+      }
 
       response.getStatus should be(200)
       response.getMetadata.containsKey(RestResource.DeploymentHeader) should be(true)
@@ -1435,9 +1451,10 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
       groupManager.app(PathId("/app")) returns None
       groupManager.updateApp(any, any, any, any, any) returns Future.failed(AppNotFoundException(missing))
 
-      intercept[AppNotFoundException] {
-        appsResource.restart(missing.toString, force = true, auth.request)
+      val response = asyncRequest { r =>
+        appsResource.restart(missing.toString, force = true, auth.request, r)
       }
+      response.getStatus shouldBe 404
     }
 
     "Index has counts and deployments by default (regression for #2171)" in new Fixture {
@@ -1536,30 +1553,34 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
       show.getStatus should be(auth.NotAuthenticatedStatus)
 
       When("we try to update an app")
-      val replace = syncRequest {
-        appsResource.replace("", app.getBytes("UTF-8"), force = false, partialUpdate = true, req)
+      val replace = asyncRequest { r =>
+        appsResource.replace("", app.getBytes("UTF-8"), force = false, partialUpdate = true, req, r)
       }
+
       Then("we receive a NotAuthenticated response")
       replace.getStatus should be(auth.NotAuthenticatedStatus)
 
       When("we try to update multiple apps")
-      val replaceMultiple = syncRequest {
-        appsResource.replaceMultiple(force = false, partialUpdate = true, s"[$app]".getBytes("UTF-8"), req)
+      val replaceMultiple = asyncRequest { r =>
+        appsResource.replaceMultiple(force = false, partialUpdate = true, s"[$app]".getBytes("UTF-8"), req, r)
       }
+
       Then("we receive a NotAuthenticated response")
       replaceMultiple.getStatus should be(auth.NotAuthenticatedStatus)
 
       When("we try to delete an app")
-      val delete = syncRequest {
-        appsResource.delete(force = false, "", req)
+      val delete = asyncRequest { r =>
+        appsResource.delete(force = false, "", req, r)
       }
+
       Then("we receive a NotAuthenticated response")
       delete.getStatus should be(auth.NotAuthenticatedStatus)
 
       When("we try to restart an app")
-      val restart = syncRequest {
-        appsResource.restart("", force = false, req)
+      val restart = asyncRequest { r =>
+        appsResource.restart("", force = false, req, r)
       }
+
       Then("we receive a NotAuthenticated response")
       restart.getStatus should be(auth.NotAuthenticatedStatus)
     }
@@ -1587,30 +1608,34 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
       show.getStatus should be(auth.UnauthorizedStatus)
 
       When("we try to update an app")
-      val replace = syncRequest {
-        appsResource.replace("/a", app.getBytes("UTF-8"), force = false, partialUpdate = true, req)
+      val replace = asyncRequest { r =>
+        appsResource.replace("/a", app.getBytes("UTF-8"), force = false, partialUpdate = true, req, r)
       }
+
       Then("we receive a NotAuthorized response")
       replace.getStatus should be(auth.UnauthorizedStatus)
 
       When("we try to update multiple apps")
-      val replaceMultiple = syncRequest {
-        appsResource.replaceMultiple(force = false, partialUpdate = true, s"[$app]".getBytes("UTF-8"), req)
+      val replaceMultiple = asyncRequest { r =>
+        appsResource.replaceMultiple(force = false, partialUpdate = true, s"[$app]".getBytes("UTF-8"), req, r)
       }
+
       Then("we receive a NotAuthorized response")
       replaceMultiple.getStatus should be(auth.UnauthorizedStatus)
 
       When("we try to remove an app")
-      val delete = syncRequest {
-        appsResource.delete(force = false, "/a", req)
+      val delete = asyncRequest { r =>
+        appsResource.delete(force = false, "/a", req, r)
       }
+
       Then("we receive a NotAuthorized response")
       delete.getStatus should be(auth.UnauthorizedStatus)
 
       When("we try to restart an app")
-      val restart = syncRequest {
-        appsResource.restart("/a", force = false, req)
+      val restart = asyncRequest { r =>
+        appsResource.restart("/a", force = false, req, r)
       }
+
       Then("we receive a NotAuthorized response")
       restart.getStatus should be(auth.UnauthorizedStatus)
     }
@@ -1652,10 +1677,10 @@ class AppsResourceTest extends AkkaUnitTest with GroupCreation {
       When("We try to remove a non-existing application")
 
       Then("A 404 is returned")
-      val exception = intercept[AppNotFoundException] {
-        appsResource.delete(force = false, "/foo", req)
+      val response = asyncRequest { r =>
+        appsResource.delete(force = false, "/foo", req, r)
       }
-      exception.getMessage should be("App '/foo' does not exist")
+      response.getStatus shouldBe 404
     }
 
     "AppUpdate does not change existing versionInfo" in new Fixture {

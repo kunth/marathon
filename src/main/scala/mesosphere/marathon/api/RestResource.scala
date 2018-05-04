@@ -87,31 +87,6 @@ trait RestResource extends JaxResource {
       case ValidationSuccess => fn(t)
     }
   }
-
-  /**
-    * Execute the given function and if any validation errors crop up, generate an UnprocessableEntity
-    * HTTP status code and send the validation error as the response body (in JSON form).
-    * @param f
-    * @return
-    */
-  protected def assumeValid(f: => Response): Response =
-    try {
-      f
-    } catch {
-      case vfe: ValidationFailedException =>
-        // model validation generates these errors
-        val entity = Json.toJson(vfe.failure).toString
-        Response.status(StatusCodes.UnprocessableEntity.intValue).entity(entity).build()
-
-      case JsResultException(errors) if errors.nonEmpty && errors.forall {
-        case (_, validationErrors) => validationErrors.nonEmpty
-      } =>
-        // Javascript validation generates these errors
-        // if all of the nested errors are validation-related then generate
-        // an error code consistent with that generated for ValidationFailedException
-        val entity = RestResource.entity(errors).toString
-        Response.status(StatusCodes.UnprocessableEntity.intValue).entity(entity).build()
-    }
 }
 
 object RestResource {

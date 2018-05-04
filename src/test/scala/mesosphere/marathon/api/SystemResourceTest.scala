@@ -9,7 +9,6 @@ import org.slf4j.LoggerFactory
 import org.mockito.Matchers
 import org.mockito.Mockito.when
 import play.api.libs.json.{ JsDefined, JsObject, JsString, Json }
-import scala.concurrent.ExecutionContext
 
 class SystemResourceTest extends AkkaUnitTest {
   class Fixture {

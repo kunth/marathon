@@ -145,35 +145,34 @@ class GroupsResource @Inject() (
     body: Array[Byte],
     @Context req: HttpServletRequest): Response = authenticated(req) { implicit identity =>
 
-    assumeValid {
-      val validatedId = validateOrThrow(id.toRootPath)
-      val raw = Json.parse(body).as[raml.GroupUpdate]
-      val effectivePath = raw.id.map(id => validateOrThrow(PathId(id)).canonicalPath(validatedId)).getOrElse(validatedId)
+    val validatedId = validateOrThrow(id.toRootPath)
+    val raw = Json.parse(body).as[raml.GroupUpdate]
+    val effectivePath = raw.id.map(id => validateOrThrow(PathId(id)).canonicalPath(validatedId)).getOrElse(validatedId)
 
-      val groupValidator = Group.validNestedGroupUpdateWithBase(effectivePath)
-      val groupUpdate = validateOrThrow(
-        normalizeApps(
-          effectivePath,
-          raw
-        ))(groupValidator)
+    val groupValidator = Group.validNestedGroupUpdateWithBase(effectivePath)
+    val groupUpdate = validateOrThrow(
+      normalizeApps(
+        effectivePath,
+        raw
+      ))(groupValidator)
 
-      val rootGroup = groupManager.rootGroup()
+    val rootGroup = groupManager.rootGroup()
 
-      def throwIfConflicting[A](conflict: Option[Any], msg: String) = {
-        conflict.map(_ => throw ConflictingChangeException(msg))
-      }
-
-      throwIfConflicting(
-        rootGroup.group(effectivePath),
-        s"Group $effectivePath is already created. Use PUT to change this group.")
-
-      throwIfConflicting(
-        rootGroup.app(effectivePath),
-        s"An app with the path $effectivePath already exists.")
-
-      val (deployment, path) = updateOrCreate(effectivePath, groupUpdate, force)
-      deploymentResult(deployment, Response.created(new URI(path.toString)))
+    def throwIfConflicting[A](conflict: Option[Any], msg: String) = {
+      conflict.map(_ => throw ConflictingChangeException(msg))
     }
+
+    throwIfConflicting(
+      rootGroup.group(effectivePath),
+      s"Group $effectivePath is already created. Use PUT to change this group.")
+
+    throwIfConflicting(
+      rootGroup.app(effectivePath),
+      s"An app with the path $effectivePath already exists.")
+
+    val (deployment, path) = updateOrCreate(effectivePath, groupUpdate, force)
+    deploymentResult(deployment, Response.created(new URI(path.toString)))
+
   }
 
   @PUT
@@ -201,33 +200,32 @@ class GroupsResource @Inject() (
     body: Array[Byte],
     @Context req: HttpServletRequest): Response = authenticated(req) { implicit identity =>
 
-    assumeValid {
-      val validatedId = validateOrThrow(id.toRootPath)
-      val raw = Json.parse(body).as[raml.GroupUpdate]
-      val effectivePath = raw.id.map(id => validateOrThrow(PathId(id)).canonicalPath(validatedId)).getOrElse(validatedId)
+    val validatedId = validateOrThrow(id.toRootPath)
+    val raw = Json.parse(body).as[raml.GroupUpdate]
+    val effectivePath = raw.id.map(id => validateOrThrow(PathId(id)).canonicalPath(validatedId)).getOrElse(validatedId)
 
-      val groupValidator = Group.validNestedGroupUpdateWithBase(effectivePath)
-      val groupUpdate = validateOrThrow(
-        normalizeApps(
-          effectivePath,
-          raw
-        ))(groupValidator)
+    val groupValidator = Group.validNestedGroupUpdateWithBase(effectivePath)
+    val groupUpdate = validateOrThrow(
+      normalizeApps(
+        effectivePath,
+        raw
+      ))(groupValidator)
 
-      if (dryRun) {
-        val newVersion = Timestamp.now()
-        val originalGroup = groupManager.rootGroup()
-        val updatedGroup = result(groupsService.updateGroup(originalGroup, effectivePath, groupUpdate, newVersion))
+    if (dryRun) {
+      val newVersion = Timestamp.now()
+      val originalGroup = groupManager.rootGroup()
+      val updatedGroup = result(groupsService.updateGroup(originalGroup, effectivePath, groupUpdate, newVersion))
 
-        ok(
-          Json.obj(
-            "steps".->(DeploymentPlan(originalGroup, updatedGroup).steps)
-          ).toString()
-        )
-      } else {
-        val (deployment, _) = updateOrCreate(effectivePath, groupUpdate, force)
-        deploymentResult(deployment)
-      }
+      ok(
+        Json.obj(
+          "steps".->(DeploymentPlan(originalGroup, updatedGroup).steps)
+        ).toString()
+      )
+    } else {
+      val (deployment, _) = updateOrCreate(effectivePath, groupUpdate, force)
+      deploymentResult(deployment)
     }
+
   }
 
   @DELETE

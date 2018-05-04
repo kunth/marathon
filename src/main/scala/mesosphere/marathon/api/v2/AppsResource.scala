@@ -25,7 +25,7 @@ import mesosphere.marathon.state._
 import mesosphere.marathon.stream.Implicits._
 import org.glassfish.jersey.server.ManagedAsync
 import play.api.libs.json.{ JsObject, Json }
-import scala.concurrent.ExecutionContext
+import scala.concurrent.{ ExecutionContext, Future }
 import scala.async.Async._
 
 @Path("v2/apps")
@@ -199,6 +199,7 @@ class AppsResource @Inject() (
     }
   }
 
+  @SuppressWarnings(Array("all")) /* async/await */
   @PUT
   @Path("""{id:.+}""")
   def replace(
@@ -206,56 +207,79 @@ class AppsResource @Inject() (
     body: Array[Byte],
     @DefaultValue("false")@QueryParam("force") force: Boolean,
     @DefaultValue("true")@QueryParam("partialUpdate") partialUpdate: Boolean,
-    @Context req: HttpServletRequest): Response = authenticated(req) { implicit identity =>
+    @Context req: HttpServletRequest,
+    @Suspended asyncResponse: AsyncResponse): Unit = sendResponse(asyncResponse) {
+    async {
+      implicit val identity = await(authenticatedAsync(req))
 
-    update(id, body, force, partialUpdate, req, allowCreation = true)
+      await(update(id, body, force, partialUpdate, req, allowCreation = true))
+    }
   }
 
+  @SuppressWarnings(Array("all")) /* async/await */
   @PATCH
   @Path("""{id:.+}""")
   def patch(
     @PathParam("id") id: String,
     body: Array[Byte],
     @DefaultValue("false")@QueryParam("force") force: Boolean,
-    @Context req: HttpServletRequest): Response = authenticated(req) { implicit identity =>
+    @Context req: HttpServletRequest,
+    @Suspended asyncResponse: AsyncResponse): Unit = sendResponse(asyncResponse) {
+    async {
+      implicit val identity = await(authenticatedAsync(req))
 
-    update(id, body, force, partialUpdate = true, req, allowCreation = false)
+      await(update(id, body, force, partialUpdate = true, req, allowCreation = false))
+    }
   }
 
+  @SuppressWarnings(Array("all")) /* async/await */
   @PUT
   def replaceMultiple(
     @DefaultValue("false")@QueryParam("force") force: Boolean,
     @DefaultValue("true")@QueryParam("partialUpdate") partialUpdate: Boolean,
     body: Array[Byte],
-    @Context req: HttpServletRequest): Response = authenticated(req) { implicit identity =>
-
-    updateMultiple(force, partialUpdate, body, allowCreation = true)
+    @Context req: HttpServletRequest,
+    @Suspended asyncResponse: AsyncResponse): Unit = sendResponse(asyncResponse) {
+    async {
+      implicit val identity = await(authenticatedAsync(req))
+      await(updateMultiple(force, partialUpdate, body, allowCreation = true))
+    }
   }
 
+  @SuppressWarnings(Array("all")) /* async/await */
   @PATCH
   def patchMultiple(
     @DefaultValue("false")@QueryParam("force") force: Boolean,
     body: Array[Byte],
-    @Context req: HttpServletRequest): Response = authenticated(req) { implicit identity =>
+    @Context req: HttpServletRequest,
+    @Suspended asyncResponse: AsyncResponse): Unit = sendResponse(asyncResponse) {
+    async {
+      implicit val identity = await(authenticatedAsync(req))
 
-    updateMultiple(force, partialUpdate = true, body, allowCreation = false)
+      await(updateMultiple(force, partialUpdate = true, body, allowCreation = false))
+    }
   }
 
+  @SuppressWarnings(Array("all")) /* async/await */
   @DELETE
   @Path("""{id:.+}""")
   def delete(
     @DefaultValue("true")@QueryParam("force") force: Boolean,
     @PathParam("id") id: String,
-    @Context req: HttpServletRequest): Response = authenticated(req) { implicit identity =>
-    val appId = id.toRootPath
-    val version = Timestamp.now()
+    @Context req: HttpServletRequest,
+    @Suspended asyncResponse: AsyncResponse): Unit = sendResponse(asyncResponse) {
+    async {
+      implicit val identity = await(authenticatedAsync(req))
+      val appId = id.toRootPath
+      val version = Timestamp.now()
 
-    def deleteApp(rootGroup: RootGroup) = {
-      checkAuthorization(DeleteRunSpec, rootGroup.app(appId), AppNotFoundException(appId))
-      rootGroup.removeApp(appId, version)
+      def deleteApp(rootGroup: RootGroup) = {
+        checkAuthorization(DeleteRunSpec, rootGroup.app(appId), AppNotFoundException(appId))
+        rootGroup.removeApp(appId, version)
+      }
+
+      deploymentResult(await(groupManager.updateRoot(appId.parent, deleteApp, version = version, force = force)))
     }
-
-    deploymentResult(result(groupManager.updateRoot(appId.parent, deleteApp, version = version, force = force)))
   }
 
   @Path("{appId:.+}/tasks")
@@ -265,27 +289,32 @@ class AppsResource @Inject() (
   def appVersionsResource(): AppVersionsResource = new AppVersionsResource(service, groupManager, authenticator,
     authorizer, config)
 
+  @SuppressWarnings(Array("all")) /* async/await */
   @POST
   @Path("{id:.+}/restart")
   def restart(
     @PathParam("id") id: String,
     @DefaultValue("false")@QueryParam("force") force: Boolean,
-    @Context req: HttpServletRequest): Response = authenticated(req) { implicit identity =>
-    val appId = id.toRootPath
+    @Context req: HttpServletRequest,
+    @Suspended asyncResponse: AsyncResponse): Unit = sendResponse(asyncResponse) {
+    async {
+      implicit val identity = await(authenticatedAsync(req))
+      val appId = id.toRootPath
 
-    def markForRestartingOrThrow(opt: Option[AppDefinition]) = {
-      opt
-        .map(checkAuthorization(UpdateRunSpec, _))
-        .map(_.markedForRestarting)
-        .getOrElse(throw AppNotFoundException(appId))
+      def markForRestartingOrThrow(opt: Option[AppDefinition]) = {
+        opt
+          .map(checkAuthorization(UpdateRunSpec, _))
+          .map(_.markedForRestarting)
+          .getOrElse(throw AppNotFoundException(appId))
+      }
+
+      val newVersion = clock.now()
+      val restartDeployment = await(
+        groupManager.updateApp(id.toRootPath, markForRestartingOrThrow, newVersion, force)
+      )
+
+      deploymentResult(restartDeployment)
     }
-
-    val newVersion = clock.now()
-    val restartDeployment = result(
-      groupManager.updateApp(id.toRootPath, markForRestartingOrThrow, newVersion, force)
-    )
-
-    deploymentResult(restartDeployment)
   }
 
   /**
@@ -300,22 +329,21 @@ class AppsResource @Inject() (
     * @param identity implicit identity
     * @return http servlet response
     */
+  @SuppressWarnings(Array("all")) /* async/await */
   private[this] def update(id: String, body: Array[Byte], force: Boolean, partialUpdate: Boolean,
-    req: HttpServletRequest, allowCreation: Boolean)(implicit identity: Identity): Response = {
+    req: HttpServletRequest, allowCreation: Boolean)(implicit identity: Identity): Future[Response] = async {
     val appId = id.toRootPath
 
-    assumeValid {
-      val appUpdate = canonicalAppUpdateFromJson(appId, body, partialUpdate)
-      val version = clock.now()
-      val plan = result(groupManager.updateApp(appId, AppHelpers.updateOrCreate(appId, _, appUpdate, partialUpdate, allowCreation, clock.now(), service), version, force))
-      val response = plan.original.app(appId)
-        .map(_ => Response.ok())
-        .getOrElse(Response.created(new URI(appId.toString)))
-      plan.target.app(appId).foreach { appDef =>
-        maybePostEvent(req, appDef)
-      }
-      deploymentResult(plan, response)
+    val appUpdate = canonicalAppUpdateFromJson(appId, body, partialUpdate)
+    val version = clock.now()
+    val plan = await(groupManager.updateApp(appId, AppHelpers.updateOrCreate(appId, _, appUpdate, partialUpdate, allowCreation, clock.now(), service), version, force))
+    val response = plan.original.app(appId)
+      .map(_ => Response.ok())
+      .getOrElse(Response.created(new URI(appId.toString)))
+    plan.target.app(appId).foreach { appDef =>
+      maybePostEvent(req, appDef)
     }
+    deploymentResult(plan, response)
   }
 
   /**
@@ -328,22 +356,21 @@ class AppsResource @Inject() (
     * @param identity implicit identity
     * @return http servlet response
     */
+  @SuppressWarnings(Array("all")) /* async/await */
   private[this] def updateMultiple(force: Boolean, partialUpdate: Boolean,
-    body: Array[Byte], allowCreation: Boolean)(implicit identity: Identity): Response = {
+    body: Array[Byte], allowCreation: Boolean)(implicit identity: Identity): Future[Response] = async {
 
-    assumeValid {
-      val version = clock.now()
-      val updates = canonicalAppUpdatesFromJson(body, partialUpdate)
+    val version = clock.now()
+    val updates = canonicalAppUpdatesFromJson(body, partialUpdate)
 
-      def updateGroup(rootGroup: RootGroup): RootGroup = updates.foldLeft(rootGroup) { (group, update) =>
-        update.id.map(PathId(_)) match {
-          case Some(id) => group.updateApp(id, AppHelpers.updateOrCreate(id, _, update, partialUpdate, allowCreation = allowCreation, clock.now(), service), version)
-          case None => group
-        }
+    def updateGroup(rootGroup: RootGroup): RootGroup = updates.foldLeft(rootGroup) { (group, update) =>
+      update.id.map(PathId(_)) match {
+        case Some(id) => group.updateApp(id, AppHelpers.updateOrCreate(id, _, update, partialUpdate, allowCreation = allowCreation, clock.now(), service), version)
+        case None => group
       }
-
-      deploymentResult(result(groupManager.updateRoot(PathId.empty, updateGroup, version, force)))
     }
+
+    deploymentResult(await(groupManager.updateRoot(PathId.empty, updateGroup, version, force)))
   }
 
   private def maybePostEvent(req: HttpServletRequest, app: AppDefinition) =
